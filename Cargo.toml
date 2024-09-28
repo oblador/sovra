@@ -1,0 +1,16 @@
+[package]
+name = "oxc_affected"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+oxc_allocator = "0.30.4"
+oxc_ast = "0.30.4"
+oxc_parser = "0.30.4"
+oxc_span = "0.30.4"
+
+[[bin]]
+name = "oxc_affected"
+path = "main.rs"
