@@ -31,16 +31,37 @@ impl<'a> Visit<'a> for CollectImports {
         self.import_paths.insert(it.source.value.to_string());
         walk::walk_import_declaration(self, it);
     }
+
+    fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
+        match &it.source {
+            oxc_ast::ast::Expression::StringLiteral(literal) => {
+                self.import_paths.insert(literal.value.to_string());
+            }
+            _ => {}
+        }
+        walk::walk_import_expression(self, it);
+    }
+
+    fn visit_export_named_declaration(&mut self, it: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
+        if it.source.is_some() {
+            self.import_paths
+                .insert(it.source.as_ref().unwrap().value.to_string());
+        }
+        walk::walk_export_named_declaration(self, it);
+    }
+
+    fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
+        self.import_paths.insert(it.source.value.to_string());
+        walk::walk_export_all_declaration(self, it);
+    }
+
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
         if it.is_require_call() {
-            let require_argument = it.arguments.first().unwrap();
-            if require_argument.is_expression() {
-                match require_argument.as_expression().unwrap() {
-                    oxc_ast::ast::Expression::StringLiteral(literal) => {
-                        self.import_paths.insert(literal.value.to_string());
-                    }
-                    _ => {}
+            match it.arguments.first().unwrap() {
+                oxc_ast::ast::Argument::StringLiteral(literal) => {
+                    self.import_paths.insert(literal.value.to_string());
                 }
+                _ => {}
             }
         }
         walk::walk_call_expression(self, it);
@@ -65,7 +86,17 @@ mod tests {
     }
 
     #[test]
-    fn test_import_destruction() {
+    fn test_import_default() {
+        assert_imports("import snel from 'hest';", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_import_side_effect() {
+        assert_imports("import 'hest';", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_import_named() {
         assert_imports("import { snel } from 'hest';", vec!["hest"]);
     }
 
@@ -83,7 +114,22 @@ mod tests {
     }
 
     #[test]
+    fn test_import_dynamic() {
+        assert_imports("import 'snel'; import('hest');", vec!["snel", "hest"]);
+    }
+
+    #[test]
     fn test_require_literal() {
         assert_imports("require('hest');", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_export_named() {
+        assert_imports("export { snel } from 'hest';", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_export_namespace() {
+        assert_imports("export * as snel from 'hest';", vec!["hest"]);
     }
 }
