@@ -1,19 +1,18 @@
 #![allow(clippy::print_stdout)]
-use std::{env, path::Path};
 
-use oxc_span::SourceType;
+use oxc_resolver::{ResolveOptions, Resolver};
 
-mod collect;
+mod affected;
+mod imports;
 
 fn main() -> std::io::Result<()> {
-    let name = env::args().nth(1).unwrap_or_else(|| "index.js".to_string());
-    let path: &Path = Path::new(&name);
-    let source_text: String = std::fs::read_to_string(path)?;
-    let source_type: SourceType = SourceType::from_path(path).unwrap();
+    let affected_tests = affected::collect_affected(
+        vec!["fixtures/simple/suite.spec.js"],
+        vec!["fixtures/simple/module.js"],
+        Resolver::new(ResolveOptions::default()),
+    );
 
-    let imports = collect::collect_imports(source_type, source_text);
-
-    println!("{imports:?}");
+    println!("{affected_tests:?}");
 
     Ok(())
 }

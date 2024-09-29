@@ -4,19 +4,16 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::HashSet;
 
-pub fn collect_imports(source_type: SourceType, source_text: String) -> HashSet<String> {
+pub fn collect_imports(source_type: SourceType, source_text: &str) -> HashSet<String> {
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, &source_text, source_type).parse();
 
     for error in ret.errors {
-        let error = error.with_source_code(source_text.clone());
+        let error = error.with_source_code(source_text.to_owned());
         println!("{error:?}");
     }
 
     let program = ret.program;
-
-    let mut ast_pass = CollectImports::default();
-    ast_pass.visit_program(&program);
 
     let mut ast_pass = CollectImports::default();
     ast_pass.visit_program(&program);
@@ -55,7 +52,7 @@ mod tests {
     use super::*;
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
-        let actual_imports = collect_imports(SourceType::mjs(), source_text.to_string());
+        let actual_imports = collect_imports(SourceType::mjs(), source_text);
         assert_eq!(
             actual_imports,
             HashSet::from_iter(
