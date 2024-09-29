@@ -7,8 +7,13 @@ mod imports;
 
 fn main() -> std::io::Result<()> {
     let affected_tests = affected::collect_affected(
-        vec!["fixtures/simple/suite.spec.js"],
-        vec!["fixtures/simple/module.js"],
+        // vec!["fixtures/require/suite.spec.js"],
+        // vec!["fixtures/require/module.js"],
+        vec![
+            "fixtures/nested/module.spec.js",
+            "fixtures/nested/sub-module.spec.js",
+        ],
+        vec!["fixtures/nested/another-module.js"],
         Resolver::new(ResolveOptions::default()),
     );
 

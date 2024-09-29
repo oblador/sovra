@@ -1,7 +1,7 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env, fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use oxc_resolver::Resolver;
@@ -14,20 +14,39 @@ pub fn collect_affected<'a>(
     changed_files: Vec<&str>,
     resolver: Resolver,
 ) -> HashSet<&'a str> {
-    let mut affected_files = HashSet::new();
-    let changed_files: HashSet<PathBuf> = HashSet::from_iter(
+    let mut affected: HashSet<PathBuf> = HashSet::from_iter(
         changed_files
             .into_iter()
             .map(|p| env::current_dir().unwrap().join(p).to_path_buf())
             .collect::<Vec<_>>(),
     );
 
-    for file in test_files.iter() {
-        let path = Path::new(&file);
-        let absolute_path = fs::canonicalize(path).unwrap();
+    let test_files_path_map: HashMap<&str, PathBuf> = HashMap::from_iter(
+        test_files
+            .iter()
+            .map(|p: &&str| (*p, env::current_dir().unwrap().join(p).to_path_buf()))
+            .collect::<Vec<_>>(),
+    );
+    let mut unvisited: Vec<(PathBuf, Vec<PathBuf>)> = test_files_path_map
+        .values()
+        .clone()
+        .into_iter()
+        .map(|f| (f.clone(), vec![f.clone()]))
+        .collect::<Vec<_>>();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
 
-        let source_text: String = std::fs::read_to_string(absolute_path.clone()).unwrap();
-        let source_type: SourceType = SourceType::from_path(path).unwrap();
+    while !unvisited.is_empty() {
+        let (absolute_path, import_graph) = unvisited[0].clone();
+        unvisited.remove(0);
+        visited.insert(absolute_path.clone());
+
+        if import_graph.iter().any(|p| affected.contains(p)) {
+            affected.extend(import_graph.clone().into_iter());
+            continue;
+        }
+
+        let source_text: String = fs::read_to_string(absolute_path.clone()).unwrap();
+        let source_type: SourceType = SourceType::from_path(absolute_path.to_path_buf()).unwrap();
         let imports = imports::collect_imports(source_type, source_text.as_str())
             .into_iter()
             .map(|specifier| {
@@ -37,54 +56,134 @@ pub fn collect_affected<'a>(
                     .full_path()
             })
             .collect::<Vec<_>>();
-        for changed_file in changed_files.iter() {
-            if imports.contains(changed_file) {
-                affected_files.insert(file.to_owned());
-                break;
+
+        if imports.iter().any(|p| affected.contains(p)) {
+            affected.extend(import_graph.clone().into_iter());
+            unvisited = unvisited
+                .into_iter()
+                .filter(|(f, _)| !affected.contains(f))
+                .collect::<Vec<_>>();
+        }
+
+        for import in imports {
+            if !visited.contains(&import) {
+                unvisited.push((
+                    import.clone(),
+                    [import_graph.clone(), vec![import.clone()]].concat(),
+                ));
             }
         }
     }
 
-    affected_files
+    test_files_path_map
+        .iter()
+        .filter(|(_f, p)| affected.contains(p.to_owned()))
+        .map(|(f, _)| *f)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use oxc_resolver::{ResolveOptions, TsconfigOptions, TsconfigReferences};
 
     use super::*;
 
-    fn assert_affected(test_file: &str, changed_files: Vec<&str>, resolve_options: ResolveOptions) {
-        let resolver = Resolver::new(resolve_options);
-
+    #[test]
+    fn test_require() {
+        let test_file = "fixtures/require/suite.spec.js";
+        let changed_files = vec!["fixtures/require/module.js"];
         assert_eq!(
-            collect_affected(vec![test_file], changed_files, resolver),
+            collect_affected(
+                vec![test_file],
+                changed_files,
+                Resolver::new(ResolveOptions::default())
+            ),
             HashSet::from([test_file])
         );
     }
 
     #[test]
-    fn test_simple() {
-        assert_affected(
-            "fixtures/simple/suite.spec.js",
-            vec!["fixtures/simple/module.js"],
-            ResolveOptions::default(),
+    #[ignore]
+    fn test_require_context() {
+        let test_file = "fixtures/require/context.js";
+        let changed_files = vec!["fixtures/require/suite.spec.js"];
+        assert_eq!(
+            collect_affected(
+                vec![test_file],
+                changed_files,
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from([test_file])
+        );
+    }
+
+    #[test]
+    fn test_nested() {
+        let test_files = [
+            "fixtures/nested/module.spec.js",
+            "fixtures/nested/sub-module.spec.js",
+        ];
+        let changed_files = ["fixtures/nested/module.js", "fixtures/nested/sub-module.js"];
+        // All test files should be affected
+        assert_eq!(
+            collect_affected(
+                test_files.to_vec(),
+                changed_files.to_vec(),
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from(test_files)
+        );
+        // Only module.spec.js should be affected
+        assert_eq!(
+            collect_affected(
+                test_files.to_vec(),
+                vec![changed_files[0]],
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from([test_files[0]])
+        );
+        // Again all test files should be affected
+        assert_eq!(
+            collect_affected(
+                test_files.to_vec(),
+                vec![changed_files[1]],
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from(test_files)
+        );
+        // Again all test files should be affected
+        assert_eq!(
+            collect_affected(
+                test_files.to_vec(),
+                vec!["fixtures/nested/another-module.js"],
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from(test_files)
         );
     }
 
     #[test]
     fn test_ts_alias() {
-        assert_affected(
-            "fixtures/ts-alias/suite.spec.ts",
-            vec!["fixtures/ts-alias/aliased.ts"],
-            ResolveOptions {
-                extensions: vec![".ts".into()],
-                tsconfig: Some(TsconfigOptions {
-                    config_file: PathBuf::from("fixtures/ts-alias/tsconfig.json"),
-                    references: TsconfigReferences::Auto,
-                }),
-                ..ResolveOptions::default()
-            },
+        let test_file = "fixtures/ts-alias/suite.spec.ts";
+        let changed_files = vec!["fixtures/ts-alias/aliased.ts"];
+        assert_eq!(
+            collect_affected(
+                vec![test_file],
+                changed_files,
+                Resolver::new(ResolveOptions {
+                    extensions: vec![".ts".into()],
+                    tsconfig: Some(TsconfigOptions {
+                        config_file: env::current_dir()
+                            .unwrap()
+                            .join("fixtures/ts-alias/tsconfig.json"),
+                        references: TsconfigReferences::Auto,
+                    }),
+                    ..ResolveOptions::default()
+                })
+            ),
+            HashSet::from([test_file])
         );
     }
 }
