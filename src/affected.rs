@@ -48,6 +48,7 @@ pub fn collect_affected<'a>(
         let source_text: String = fs::read_to_string(absolute_path.clone()).unwrap();
         let source_type: SourceType = SourceType::from_path(absolute_path.to_path_buf()).unwrap();
         let imports = imports::collect_imports(source_type, source_text.as_str())
+            .specifiers
             .into_iter()
             .map(|specifier| {
                 resolver

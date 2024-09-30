@@ -1,24 +1,33 @@
 use oxc_allocator::Allocator;
 use oxc_ast::{visit::walk, Visit};
+use oxc_diagnostics::Error;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::HashSet;
 
-pub fn collect_imports(source_type: SourceType, source_text: &str) -> HashSet<String> {
+pub struct ImportsReturn {
+    pub errors: Vec<Error>,
+    pub specifiers: Vec<String>,
+}
+
+pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsReturn {
     let allocator = Allocator::default();
-    let ret = Parser::new(&allocator, &source_text, source_type).parse();
+    let parsed = Parser::new(&allocator, &source_text, source_type).parse();
 
-    for error in ret.errors {
-        let error = error.with_source_code(source_text.to_owned());
-        println!("{error:?}");
-    }
-
-    let program = ret.program;
+    let program = parsed.program;
 
     let mut ast_pass = CollectImports::default();
     ast_pass.visit_program(&program);
 
-    ast_pass.import_paths
+    let ret = ImportsReturn {
+        errors: parsed
+            .errors
+            .into_iter()
+            .map(|e| e.with_source_code(source_text.to_owned()))
+            .collect(),
+        specifiers: ast_pass.import_paths.into_iter().collect(),
+    };
+    ret
 }
 
 #[derive(Debug, Default)]
@@ -73,16 +82,13 @@ mod tests {
     use super::*;
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
-        let actual_imports = collect_imports(SourceType::mjs(), source_text);
-        assert_eq!(
-            actual_imports,
-            HashSet::from_iter(
-                expected_imports
-                    .into_iter()
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            )
-        );
+        let ret = collect_imports(SourceType::mjs(), source_text);
+        // Convert to HashSet to ignore order
+        let expected: HashSet<String> =
+            HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
+        let actual: HashSet<String> = HashSet::from_iter(ret.specifiers.into_iter());
+        assert_eq!(expected, actual);
+        assert!(ret.errors.is_empty());
     }
 
     #[test]
@@ -131,5 +137,12 @@ mod tests {
     #[test]
     fn test_export_namespace() {
         assert_imports("export * as snel from 'hest';", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_invalid_syntax() {
+        let ret = collect_imports(SourceType::mjs(), "import snel from 'hest'; const;");
+        assert!(!ret.errors.is_empty());
+        assert!(ret.specifiers.is_empty());
     }
 }
