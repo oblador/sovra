@@ -1,4 +1,6 @@
-# oxc_affected
+# oxc-affected
+
+Fast test decider for JavaScript projects, written in Rust on top of Oxc.
 
 ## Usage
 

@@ -1,0 +1,23 @@
+{
+  "name": "@oxc-affected/binding",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "napi build --platform --release --package-json-path npm/package.json --manifest-path napi/Cargo.toml",
+    "build:debug": "napi build --platform --package-json-path npm/package.json --manifest-path napi/Cargo.toml",
+    "prepublishOnly": "napi pre-publish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.0.0-alpha.62",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oblador/oxc-affected.git"
+  },
+  "funding": {
+    "url": "https://github.com/sponsors/oblador"
+  },
+  "optionalDependencies": {}
+}
