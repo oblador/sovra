@@ -1,0 +1,8 @@
+{
+  "name": "workspace-pkg-a",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "workspace-pkg-b": "0.0.0"
+  }
+}

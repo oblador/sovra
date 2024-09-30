@@ -187,4 +187,18 @@ mod tests {
             HashSet::from([test_file])
         );
     }
+
+    #[test]
+    fn test_yarn_workspace() {
+        let test_file = "fixtures/yarn-workspace/app/index.js";
+        let changed_files = vec!["fixtures/yarn-workspace/packages/workspace-pkg-b/index.js"];
+        assert_eq!(
+            collect_affected(
+                vec![test_file],
+                changed_files,
+                Resolver::new(ResolveOptions::default())
+            ),
+            HashSet::from([test_file])
+        );
+    }
 }
