@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 pub struct ImportsReturn {
     pub errors: Vec<Error>,
-    pub specifiers: Vec<String>,
+    pub imports_paths: Vec<String>,
 }
 
 pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsReturn {
@@ -19,19 +19,22 @@ pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsRet
     let mut ast_pass = CollectImports::default();
     ast_pass.visit_program(&program);
 
+    let mut errors = parsed
+        .errors
+        .into_iter()
+        .map(|e| e.with_source_code(source_text.to_owned()))
+        .collect::<Vec<_>>();
+    errors.append(&mut ast_pass.errors);
     let ret = ImportsReturn {
-        errors: parsed
-            .errors
-            .into_iter()
-            .map(|e| e.with_source_code(source_text.to_owned()))
-            .collect(),
-        specifiers: ast_pass.import_paths.into_iter().collect(),
+        errors: errors,
+        imports_paths: ast_pass.import_paths.into_iter().collect(),
     };
     ret
 }
 
 #[derive(Debug, Default)]
 struct CollectImports {
+    errors: Vec<Error>,
     import_paths: HashSet<String>,
 }
 
@@ -46,7 +49,21 @@ impl<'a> Visit<'a> for CollectImports {
             oxc_ast::ast::Expression::StringLiteral(literal) => {
                 self.import_paths.insert(literal.value.to_string());
             }
-            _ => {}
+            oxc_ast::ast::Expression::TemplateLiteral(literal) => {
+                if literal.expressions.len() == 0 && literal.quasis.len() == 1 {
+                    self.import_paths
+                        .insert(literal.quasis.first().unwrap().value.raw.to_string());
+                } else {
+                    self.errors.push(Error::msg(
+                        "Import call must not have dynamic template literals",
+                    ));
+                }
+            }
+            _ => {
+                self.errors.push(Error::msg(
+                    "Import call must have a string literal argument",
+                ));
+            }
         }
         walk::walk_import_expression(self, it);
     }
@@ -66,12 +83,12 @@ impl<'a> Visit<'a> for CollectImports {
 
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
         if it.is_require_call() {
-            match it.arguments.first().unwrap() {
-                oxc_ast::ast::Argument::StringLiteral(literal) => {
-                    self.import_paths.insert(literal.value.to_string());
-                }
-                _ => {}
-            }
+            self.import_paths
+                .insert(it.common_js_require().unwrap().value.to_string());
+        } else if it.callee_name().is_some_and(|n| n == "require") {
+            self.errors.push(Error::msg(
+                "Require call must have a string literal argument",
+            ));
         }
         walk::walk_call_expression(self, it);
     }
@@ -86,9 +103,15 @@ mod tests {
         // Convert to HashSet to ignore order
         let expected: HashSet<String> =
             HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
-        let actual: HashSet<String> = HashSet::from_iter(ret.specifiers.into_iter());
+        let actual: HashSet<String> = HashSet::from_iter(ret.imports_paths.into_iter());
         assert_eq!(expected, actual);
         assert!(ret.errors.is_empty());
+    }
+
+    fn asset_error(source_text: &str) {
+        let ret = collect_imports(SourceType::mjs(), source_text);
+        assert!(!ret.errors.is_empty());
+        assert!(ret.imports_paths.is_empty());
     }
 
     #[test]
@@ -125,6 +148,11 @@ mod tests {
     }
 
     #[test]
+    fn test_import_dynamic_template_literal() {
+        assert_imports("import(`hest`);", vec!["hest"]);
+    }
+
+    #[test]
     fn test_require_literal() {
         assert_imports("require('hest');", vec!["hest"]);
     }
@@ -141,8 +169,50 @@ mod tests {
 
     #[test]
     fn test_invalid_syntax() {
-        let ret = collect_imports(SourceType::mjs(), "import snel from 'hest'; const;");
+        asset_error("import snel from 'hest'; const;");
+    }
+
+    #[test]
+    fn test_empty_require() {
+        let ret = collect_imports(SourceType::mjs(), "require('snel'); require();");
         assert!(!ret.errors.is_empty());
-        assert!(ret.specifiers.is_empty());
+        assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_variable_require() {
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "require('snel'); const path = 'hest'; require(path);",
+        );
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_variable_import() {
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "import 'snel'; const path = 'hest'; import(path);",
+        );
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_variable_template_literal_import() {
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "import 'snel'; const path = 'hest'; import(`${path}`);",
+        );
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_dynamic_import() {
+        let ret = collect_imports(SourceType::mjs(), "import 'snel'; import('he' + 'st');");
+        assert!(!ret.errors.is_empty());
+        assert_eq!(ret.imports_paths, vec!["snel"]);
     }
 }
