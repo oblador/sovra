@@ -1,12 +1,11 @@
 use oxc_allocator::Allocator;
 use oxc_ast::{visit::walk, Visit};
-use oxc_diagnostics::Error;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::HashSet;
 
 pub struct ImportsReturn {
-    pub errors: Vec<Error>,
+    pub errors: Vec<String>,
     pub imports_paths: Vec<String>,
 }
 
@@ -22,7 +21,7 @@ pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsRet
     let mut errors = parsed
         .errors
         .into_iter()
-        .map(|e| e.with_source_code(source_text.to_owned()))
+        .map(|e| e.with_source_code(source_text.to_owned()).to_string())
         .collect::<Vec<_>>();
     errors.append(&mut ast_pass.errors);
     let ret = ImportsReturn {
@@ -34,7 +33,7 @@ pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsRet
 
 #[derive(Debug, Default)]
 struct CollectImports {
-    errors: Vec<Error>,
+    errors: Vec<String>,
     import_paths: HashSet<String>,
 }
 
@@ -54,15 +53,13 @@ impl<'a> Visit<'a> for CollectImports {
                     self.import_paths
                         .insert(literal.quasis.first().unwrap().value.raw.to_string());
                 } else {
-                    self.errors.push(Error::msg(
-                        "Import call must not have dynamic template literals",
-                    ));
+                    self.errors
+                        .push("Import call must not have dynamic template literals".to_string());
                 }
             }
             _ => {
-                self.errors.push(Error::msg(
-                    "Import call must have a string literal argument",
-                ));
+                self.errors
+                    .push("Import call must have a string literal argument".to_string());
             }
         }
         walk::walk_import_expression(self, it);
@@ -86,9 +83,8 @@ impl<'a> Visit<'a> for CollectImports {
             self.import_paths
                 .insert(it.common_js_require().unwrap().value.to_string());
         } else if it.callee_name().is_some_and(|n| n == "require") {
-            self.errors.push(Error::msg(
-                "Require call must have a string literal argument",
-            ));
+            self.errors
+                .push("Require call must have a string literal argument".to_string());
         }
         walk::walk_call_expression(self, it);
     }

@@ -15,8 +15,8 @@ mod options;
 
 #[napi(object)]
 pub struct AffectedResult {
-    pub paths: Vec<String>,
-    pub error: Option<String>,
+    pub files: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -33,8 +33,8 @@ pub fn get_affected(
         resolver,
     );
     AffectedResult {
-        paths: affected.iter().map(|p| p.to_string()).collect(),
-        error: None,
+        files: affected.files,
+        errors: affected.errors,
     }
 }
 

@@ -21,12 +21,11 @@ include      = ["/src"]
 doctest = false
 
 [dependencies]
-oxc_allocator   = "0.30.5"
-oxc_ast         = "0.30.5"
-oxc_diagnostics = "0.30.5"
-oxc_parser      = "0.30.5"
-oxc_resolver    = "1.12.0"
-oxc_span        = "0.30.5"
+oxc_allocator = "0.30.5"
+oxc_ast       = "0.30.5"
+oxc_parser    = "0.30.5"
+oxc_resolver  = "1.12.0"
+oxc_span      = "0.30.5"
 
 # For napi
 [profile.release]

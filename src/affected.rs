@@ -9,17 +9,23 @@ use oxc_span::SourceType;
 
 use crate::imports;
 
-pub fn collect_affected<'a>(
-    test_files: Vec<&'a str>,
+pub struct AffectedReturn {
+    pub errors: Vec<String>,
+    pub files: Vec<String>,
+}
+
+pub fn collect_affected(
+    test_files: Vec<&str>,
     changed_files: Vec<&str>,
     resolver: Resolver,
-) -> HashSet<&'a str> {
+) -> AffectedReturn {
     let mut affected: HashSet<PathBuf> = HashSet::from_iter(
         changed_files
             .into_iter()
             .map(|p| env::current_dir().unwrap().join(p).to_path_buf())
             .collect::<Vec<_>>(),
     );
+    let mut errors: Vec<String> = Vec::new();
 
     let test_files_path_map: HashMap<&str, PathBuf> = HashMap::from_iter(
         test_files
@@ -47,16 +53,18 @@ pub fn collect_affected<'a>(
 
         let source_text: String = fs::read_to_string(absolute_path.clone()).unwrap();
         let source_type: SourceType = SourceType::from_path(absolute_path.to_path_buf()).unwrap();
-        let imports = imports::collect_imports(source_type, source_text.as_str())
-            .imports_paths
-            .into_iter()
-            .map(|specifier| {
-                resolver
-                    .resolve(&absolute_path.parent().unwrap(), specifier.as_str())
-                    .unwrap()
-                    .full_path()
-            })
-            .collect::<Vec<_>>();
+        let result = imports::collect_imports(source_type, source_text.as_str());
+        errors.extend(result.errors);
+        let mut imports: Vec<PathBuf> = Vec::new();
+        for import_path in result.imports_paths.iter() {
+            let resolution =
+                resolver.resolve(&absolute_path.parent().unwrap(), import_path.as_str());
+            if resolution.is_ok() {
+                imports.push(resolution.unwrap().full_path());
+            } else {
+                errors.push(resolution.unwrap_err().to_string());
+            }
+        }
 
         if imports.iter().any(|p| affected.contains(p)) {
             affected.extend(import_graph.clone().into_iter());
@@ -75,12 +83,15 @@ pub fn collect_affected<'a>(
             }
         }
     }
-
-    test_files_path_map
-        .iter()
-        .filter(|(_f, p)| affected.contains(p.to_owned()))
-        .map(|(f, _)| *f)
-        .collect()
+    let ret: AffectedReturn = AffectedReturn {
+        errors: errors,
+        files: test_files_path_map
+            .iter()
+            .filter(|(_f, p)| affected.contains(p.to_owned()))
+            .map(|(f, _)| f.to_string())
+            .collect(),
+    };
+    ret
 }
 
 #[cfg(test)]
@@ -91,32 +102,42 @@ mod tests {
 
     use super::*;
 
+    fn assert_collect_affected(
+        test_files: Vec<&str>,
+        changed_files: Vec<&str>,
+        expected: Vec<&str>,
+        resolver: Resolver,
+    ) {
+        let ret = collect_affected(test_files, changed_files, resolver);
+        let expected: HashSet<String> = HashSet::from_iter(expected.iter().map(|s| s.to_string()));
+        let actual: HashSet<String> = HashSet::from_iter(ret.files.iter().map(|s| s.to_string()));
+        assert_eq!(expected, actual);
+        assert!(ret.errors.is_empty());
+    }
+
+    fn assert_affected(test_files: Vec<&str>, changed_files: Vec<&str>) {
+        assert_collect_affected(
+            test_files.clone(),
+            changed_files,
+            test_files.clone(),
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
     #[test]
     fn test_require() {
-        let test_file = "fixtures/require/suite.spec.js";
-        let changed_files = vec!["fixtures/require/module.js"];
-        assert_eq!(
-            collect_affected(
-                vec![test_file],
-                changed_files,
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from([test_file])
+        assert_affected(
+            vec!["fixtures/require/suite.spec.js"],
+            vec!["fixtures/require/module.js"],
         );
     }
 
     #[test]
     #[ignore]
     fn test_require_context() {
-        let test_file = "fixtures/require/context.js";
-        let changed_files = vec!["fixtures/require/suite.spec.js"];
-        assert_eq!(
-            collect_affected(
-                vec![test_file],
-                changed_files,
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from([test_file])
+        assert_affected(
+            vec!["fixtures/require/context.js"],
+            vec!["fixtures/require/suite.spec.js"],
         );
     }
 
@@ -127,78 +148,54 @@ mod tests {
             "fixtures/nested/sub-module.spec.js",
         ];
         let changed_files = ["fixtures/nested/module.js", "fixtures/nested/sub-module.js"];
-        // All test files should be affected
-        assert_eq!(
-            collect_affected(
-                test_files.to_vec(),
-                changed_files.to_vec(),
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from(test_files)
+        assert_affected(test_files.to_vec(), changed_files.to_vec());
+        assert_collect_affected(
+            test_files.to_vec(),
+            vec![changed_files[0]],
+            vec![test_files[0]],
+            Resolver::new(ResolveOptions::default()),
         );
-        // Only module.spec.js should be affected
-        assert_eq!(
-            collect_affected(
-                test_files.to_vec(),
-                vec![changed_files[0]],
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from([test_files[0]])
-        );
-        // Again all test files should be affected
-        assert_eq!(
-            collect_affected(
-                test_files.to_vec(),
-                vec![changed_files[1]],
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from(test_files)
-        );
-        // Again all test files should be affected
-        assert_eq!(
-            collect_affected(
-                test_files.to_vec(),
-                vec!["fixtures/nested/another-module.js"],
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from(test_files)
+        assert_affected(test_files.to_vec(), vec![changed_files[1]]);
+        assert_collect_affected(
+            test_files.to_vec(),
+            vec!["fixtures/nested/another-module.js"],
+            test_files.to_vec(),
+            Resolver::new(ResolveOptions::default()),
         );
     }
 
     #[test]
     fn test_ts_alias() {
-        let test_file = "fixtures/ts-alias/suite.spec.ts";
+        let test_files = vec!["fixtures/ts-alias/suite.spec.ts"];
         let changed_files = vec!["fixtures/ts-alias/aliased.ts"];
-        assert_eq!(
-            collect_affected(
-                vec![test_file],
-                changed_files,
-                Resolver::new(ResolveOptions {
-                    extensions: vec![".ts".into()],
-                    tsconfig: Some(TsconfigOptions {
-                        config_file: env::current_dir()
-                            .unwrap()
-                            .join("fixtures/ts-alias/tsconfig.json"),
-                        references: TsconfigReferences::Auto,
-                    }),
-                    ..ResolveOptions::default()
-                })
-            ),
-            HashSet::from([test_file])
+        assert_collect_affected(
+            test_files.clone(),
+            changed_files,
+            test_files,
+            Resolver::new(ResolveOptions {
+                extensions: vec![".ts".into()],
+                tsconfig: Some(TsconfigOptions {
+                    config_file: env::current_dir()
+                        .unwrap()
+                        .join("fixtures/ts-alias/tsconfig.json"),
+                    references: TsconfigReferences::Auto,
+                }),
+                ..ResolveOptions::default()
+            }),
         );
     }
 
     #[test]
     fn test_yarn_workspace() {
-        let test_file = "fixtures/yarn-workspace/app/index.js";
-        let changed_files = vec!["fixtures/yarn-workspace/packages/workspace-pkg-b/index.js"];
-        assert_eq!(
-            collect_affected(
-                vec![test_file],
-                changed_files,
-                Resolver::new(ResolveOptions::default())
-            ),
-            HashSet::from([test_file])
+        assert_affected(
+            vec!["fixtures/yarn-workspace/app/index.js"],
+            vec!["fixtures/yarn-workspace/packages/workspace-pkg-b/index.js"],
         );
+    }
+
+    #[test]
+    fn test_bad_import() {
+        let ret = collect_affected(vec!["fixtures/bad-import.js"], vec![], Resolver::default());
+        assert_eq!(ret.errors, vec!["Cannot find module 'bad-import'"]);
     }
 }
