@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use oxc_resolver::Resolver;
+use oxc_resolver::{ResolveError, Resolver};
 use oxc_span::SourceType;
 
 use crate::imports;
@@ -57,12 +57,16 @@ pub fn collect_affected(
         errors.extend(result.errors);
         let mut imports: Vec<PathBuf> = Vec::new();
         for import_path in result.imports_paths.iter() {
-            let resolution =
+            let resolve_result =
                 resolver.resolve(&absolute_path.parent().unwrap(), import_path.as_str());
-            if resolution.is_ok() {
-                imports.push(resolution.unwrap().full_path());
-            } else {
-                errors.push(resolution.unwrap_err().to_string());
+            match resolve_result {
+                Ok(resolution) => imports.push(resolution.full_path()),
+                Err(e) => match e {
+                    ResolveError::Builtin(_) => {} // Skip builtins
+                    _ => {
+                        errors.push(e.to_string());
+                    }
+                },
             }
         }
 
@@ -180,6 +184,19 @@ mod tests {
                         .join("fixtures/ts-alias/tsconfig.json"),
                     references: TsconfigReferences::Auto,
                 }),
+                ..ResolveOptions::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn test_builtins() {
+        assert_collect_affected(
+            vec!["fixtures/built-in-module.mjs"],
+            vec!["fixtures/nested/another-module.js"],
+            vec![],
+            Resolver::new(ResolveOptions {
+                builtin_modules: true,
                 ..ResolveOptions::default()
             }),
         );
