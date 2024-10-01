@@ -3,17 +3,17 @@ members  = ["napi"]
 resolver = "2"
 
 [package]
-name         = "oxc_affected"
+name         = "sovra"
 version      = "0.1.0"
 authors      = ["Joel Arvidsson <joel@oblador.se>"]
 categories   = ["development-tools"]
 description  = "JavaScript test decider using Oxc"
 edition      = "2021"
-homepage     = "https://github.com/oblador/oxc-affected"
+homepage     = "https://github.com/oblador/sovra"
 keywords     = ["node", "oxc", "test", "test-decider", "affected"]
 license      = "MIT"
 readme       = "README.md"
-repository   = "https://github.com/oblador/oxc-affected"
+repository   = "https://github.com/oblador/sovra"
 rust-version = "1.70"
 include      = ["/src"]
 

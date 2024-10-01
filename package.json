@@ -1,5 +1,5 @@
 {
-  "name": "@oxc-affected/binding",
+  "name": "@sovra/binding",
   "private": true,
   "version": "0.0.0",
   "scripts": {
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oblador/oxc-affected.git"
+    "url": "git+https://github.com/oblador/sovra.git"
   },
   "funding": {
     "url": "https://github.com/sponsors/oblador"

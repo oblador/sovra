@@ -1,13 +1,13 @@
 extern crate napi;
 extern crate napi_derive;
-extern crate oxc_affected;
 extern crate oxc_resolver;
+extern crate sovra;
 
 use std::path::PathBuf;
 
 use napi_derive::napi;
-use oxc_affected::collect_affected;
 use oxc_resolver::{ResolveOptions, Resolver};
+use sovra::collect_affected;
 
 use self::options::{NapiResolveOptions, StrOrStrList};
 

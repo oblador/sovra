@@ -1,7 +1,7 @@
 {
-  "name": "oxc-affected",
+  "name": "sovra",
   "version": "0.1.0",
-  "description": "Oxc Affected Node API",
+  "description": "Rust-based Test Decider using Oxc",
   "main": "index.js",
   "files": [
     "index.d.ts",
@@ -10,15 +10,15 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oblador/oxc-affected.git"
+    "url": "git+https://github.com/oblador/sovra.git"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
   "napi": {
-    "binaryName": "affected",
-    "packageName": "@oxc-affected/binding",
+    "binaryName": "sovra",
+    "packageName": "@sovra/binding",
     "targets": [
       "x86_64-pc-windows-msvc",
       "aarch64-pc-windows-msvc",
