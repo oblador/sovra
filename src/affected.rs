@@ -53,7 +53,6 @@ pub fn collect_affected(
             continue;
         }
 
-        let source_type: SourceType = SourceType::from_path(absolute_path.to_path_buf()).unwrap();
         if absolute_path
             .components()
             .any(|c| module_paths.contains(c.to_owned().as_os_str().to_str().unwrap()))
@@ -62,6 +61,11 @@ pub fn collect_affected(
             continue;
         }
 
+        let source_type = SourceType::from_path(absolute_path.to_path_buf());
+        if source_type.is_err() {
+            // Skip non-source files
+            continue;
+        }
         let source_text: String = fs::read_to_string(&absolute_path).unwrap();
         let result = imports::collect_imports(source_type.unwrap(), source_text.as_str());
         errors.extend(result.errors);
@@ -200,6 +204,14 @@ mod tests {
                 }),
                 ..ResolveOptions::default()
             }),
+        );
+    }
+
+    #[test]
+    fn test_non_source_imports() {
+        assert_unaffected(
+            vec!["fixtures/nested/assets.js"],
+            vec!["fixtures/nested/another-module.js"],
         );
     }
 
