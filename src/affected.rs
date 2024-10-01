@@ -124,8 +124,9 @@ mod tests {
         let ret = collect_affected(test_files, changed_files, resolver);
         let expected: HashSet<String> = HashSet::from_iter(expected.iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.files.iter().map(|s| s.to_string()));
+        let no_errors: Vec<String> = vec![];
         assert_eq!(expected, actual);
-        assert!(ret.errors.is_empty());
+        assert_eq!(ret.errors, no_errors);
     }
 
     fn assert_affected(test_files: Vec<&str>, changed_files: Vec<&str>) {
@@ -188,8 +189,8 @@ mod tests {
 
     #[test]
     fn test_ts_alias() {
-        let test_files = vec!["fixtures/ts-alias/suite.spec.ts"];
-        let changed_files = vec!["fixtures/ts-alias/aliased.ts"];
+        let test_files = vec!["fixtures/typescript/suite.spec.ts"];
+        let changed_files = vec!["fixtures/typescript/aliased.ts"];
         assert_collect_affected(
             test_files.clone(),
             changed_files,
@@ -199,7 +200,28 @@ mod tests {
                 tsconfig: Some(TsconfigOptions {
                     config_file: env::current_dir()
                         .unwrap()
-                        .join("fixtures/ts-alias/tsconfig.json"),
+                        .join("fixtures/typescript/tsconfig.json"),
+                    references: TsconfigReferences::Auto,
+                }),
+                ..ResolveOptions::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn test_type_import() {
+        let test_files = vec!["fixtures/typescript/type-import.ts"];
+        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        assert_collect_affected(
+            test_files.clone(),
+            changed_files,
+            test_files,
+            Resolver::new(ResolveOptions {
+                extensions: vec![".ts".into()],
+                tsconfig: Some(TsconfigOptions {
+                    config_file: env::current_dir()
+                        .unwrap()
+                        .join("fixtures/typescript/tsconfig.json"),
                     references: TsconfigReferences::Auto,
                 }),
                 ..ResolveOptions::default()
