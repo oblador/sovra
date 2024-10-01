@@ -19,6 +19,8 @@ pub fn collect_affected(
     changed_files: Vec<&str>,
     resolver: Resolver,
 ) -> AffectedReturn {
+    let module_paths: HashSet<&str> =
+        HashSet::from_iter(resolver.options().modules.iter().map(|m| m.as_str()));
     let mut affected: HashSet<PathBuf> = HashSet::from_iter(
         changed_files
             .into_iter()
@@ -51,9 +53,17 @@ pub fn collect_affected(
             continue;
         }
 
-        let source_text: String = fs::read_to_string(absolute_path.clone()).unwrap();
         let source_type: SourceType = SourceType::from_path(absolute_path.to_path_buf()).unwrap();
-        let result = imports::collect_imports(source_type, source_text.as_str());
+        if absolute_path
+            .components()
+            .any(|c| module_paths.contains(c.to_owned().as_os_str().to_str().unwrap()))
+        {
+            // Skip node_modules
+            continue;
+        }
+
+        let source_text: String = fs::read_to_string(&absolute_path).unwrap();
+        let result = imports::collect_imports(source_type.unwrap(), source_text.as_str());
         errors.extend(result.errors);
         let mut imports: Vec<PathBuf> = Vec::new();
         for import_path in result.imports_paths.iter() {
@@ -70,16 +80,10 @@ pub fn collect_affected(
             }
         }
 
-        if imports.iter().any(|p| affected.contains(p)) {
-            affected.extend(import_graph.clone().into_iter());
-            unvisited = unvisited
-                .into_iter()
-                .filter(|(f, _)| !affected.contains(f))
-                .collect::<Vec<_>>();
-        }
-
         for import in imports {
-            if !visited.contains(&import) {
+            if affected.contains(&import) {
+                affected.extend(import_graph.clone().into_iter());
+            } else if !visited.contains(&import) {
                 unvisited.push((
                     import.clone(),
                     [import_graph.clone(), vec![import.clone()]].concat(),
@@ -87,6 +91,7 @@ pub fn collect_affected(
             }
         }
     }
+
     let ret: AffectedReturn = AffectedReturn {
         errors: errors,
         files: test_files_path_map
@@ -124,6 +129,15 @@ mod tests {
             test_files.clone(),
             changed_files,
             test_files.clone(),
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    fn assert_unaffected(test_files: Vec<&str>, changed_files: Vec<&str>) {
+        assert_collect_affected(
+            test_files.clone(),
+            changed_files,
+            vec![],
             Resolver::new(ResolveOptions::default()),
         );
     }
@@ -214,5 +228,10 @@ mod tests {
     fn test_bad_import() {
         let ret = collect_affected(vec!["fixtures/bad-import.js"], vec![], Resolver::default());
         assert_eq!(ret.errors, vec!["Cannot find module 'bad-import'"]);
+    }
+
+    #[test]
+    fn test_bad_module() {
+        assert_unaffected(vec!["fixtures/modules/index.mjs"], vec![]);
     }
 }
