@@ -19,12 +19,13 @@ pub fn collect_affected(
     changed_files: Vec<&str>,
     resolver: Resolver,
 ) -> AffectedReturn {
+    let current_dir = env::current_dir().unwrap();
     let module_paths: HashSet<&str> =
         HashSet::from_iter(resolver.options().modules.iter().map(|m| m.as_str()));
     let mut affected: HashSet<PathBuf> = HashSet::from_iter(
         changed_files
             .into_iter()
-            .map(|p| env::current_dir().unwrap().join(p).to_path_buf())
+            .map(|p| current_dir.join(p).to_path_buf())
             .collect::<Vec<_>>(),
     );
     let mut errors: Vec<String> = Vec::new();
@@ -32,7 +33,7 @@ pub fn collect_affected(
     let test_files_path_map: HashMap<&str, PathBuf> = HashMap::from_iter(
         test_files
             .iter()
-            .map(|p: &&str| (*p, env::current_dir().unwrap().join(p).to_path_buf()))
+            .map(|p: &&str| (*p, current_dir.join(p).to_path_buf()))
             .collect::<Vec<_>>(),
     );
     let mut unvisited: Vec<(PathBuf, Vec<PathBuf>)> = test_files_path_map
@@ -69,12 +70,12 @@ pub fn collect_affected(
         let source_text: String = fs::read_to_string(&absolute_path).unwrap();
         let result = imports::collect_imports(source_type.unwrap(), source_text.as_str());
         errors.extend(result.errors);
+        let parent_path = absolute_path.parent().unwrap();
         let mut imports: Vec<PathBuf> = Vec::new();
         for import_path in result.imports_paths.iter() {
-            let resolve_result =
-                resolver.resolve(&absolute_path.parent().unwrap(), import_path.as_str());
+            let resolve_result = resolver.resolve(parent_path, import_path.as_str());
             match resolve_result {
-                Ok(resolution) => imports.push(resolution.full_path()),
+                Ok(resolution) => imports.push(current_dir.join(resolution.path())),
                 Err(e) => match e {
                     ResolveError::Builtin(_) => {} // Skip builtins
                     _ => {
