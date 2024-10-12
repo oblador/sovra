@@ -189,6 +189,18 @@ mod tests {
     }
 
     #[test]
+    fn test_circular() {
+        let test_files = ["fixtures/nested/circular.spec.js"];
+        assert_affected(test_files.to_vec(), vec!["fixtures/nested/circular-1.js"]);
+        assert_affected(test_files.to_vec(), vec!["fixtures/nested/circular-2.js"]);
+        assert_affected(test_files.to_vec(), vec!["fixtures/nested/circular-3.js"]);
+        assert_unaffected(
+            test_files.to_vec(),
+            vec!["fixtures/nested/another-module.js"],
+        );
+    }
+
+    #[test]
     fn test_ts_alias() {
         let test_files = vec!["fixtures/typescript/suite.spec.ts"];
         let changed_files = vec!["fixtures/typescript/aliased.ts"];
