@@ -80,8 +80,15 @@ impl<'a> Visit<'a> for CollectImports {
 
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
         if it.is_require_call() {
-            self.import_paths
-                .insert(it.common_js_require().unwrap().value.to_string());
+            match it.common_js_require() {
+                Some(literal) => {
+                    self.import_paths.insert(literal.value.to_string());
+                }
+                None => {
+                    self.errors
+                        .push("Require call must have a string literal argument".to_string());
+                }
+            }
         } else if it.callee_name().is_some_and(|n| n == "require") {
             self.errors
                 .push("Require call must have a string literal argument".to_string());
@@ -203,6 +210,15 @@ mod tests {
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_variable_template_literal_require() {
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "const path = 'hest'; require(`${path}`);",
+        );
+        assert!(!ret.errors.is_empty());
     }
 
     #[test]
