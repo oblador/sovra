@@ -5,13 +5,32 @@ use std::{
 };
 
 use oxc_resolver::{ResolveError, Resolver};
-use oxc_span::SourceType;
+use oxc_span::{SourceType, VALID_EXTENSIONS};
 
 use crate::imports;
 
 pub struct AffectedReturn {
     pub errors: Vec<String>,
     pub files: Vec<String>,
+}
+
+fn extend_affected(
+    affected: &mut HashSet<PathBuf>,
+    import: &PathBuf,
+    dependents_map: &HashMap<PathBuf, HashSet<PathBuf>>,
+) {
+    affected.insert(import.clone());
+    match dependents_map.get(import) {
+        None => return,
+        Some(dependents) => {
+            for dependent in dependents.iter() {
+                if affected.contains(dependent) {
+                    continue;
+                }
+                extend_affected(affected, dependent, dependents_map);
+            }
+        }
+    }
 }
 
 pub fn collect_affected(
@@ -36,63 +55,66 @@ pub fn collect_affected(
             .map(|p: &&str| (*p, current_dir.join(p).to_path_buf()))
             .collect::<Vec<_>>(),
     );
-    let mut unvisited: Vec<(PathBuf, Vec<PathBuf>)> = test_files_path_map
+    let mut unvisited: Vec<PathBuf> = test_files_path_map
         .values()
-        .clone()
-        .into_iter()
-        .map(|f| (f.clone(), vec![f.clone()]))
+        .cloned()
+        .filter(|p| !affected.contains(p))
         .collect::<Vec<_>>();
-    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut dependents_map: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
 
     while !unvisited.is_empty() {
-        let (absolute_path, import_graph) = unvisited[0].clone();
+        let absolute_path = unvisited[0].clone();
         unvisited.remove(0);
-        visited.insert(absolute_path.clone());
-
-        if import_graph.iter().any(|p| affected.contains(p)) {
-            affected.extend(import_graph.clone().into_iter());
+        if affected.contains(&absolute_path) {
+            extend_affected(&mut affected, &absolute_path, &dependents_map);
             continue;
         }
 
-        if absolute_path
-            .components()
-            .any(|c| module_paths.contains(c.to_owned().as_os_str().to_str().unwrap()))
-        {
-            // Skip node_modules
-            continue;
-        }
-
-        let source_type = SourceType::from_path(absolute_path.to_path_buf());
-        if source_type.is_err() {
-            // Skip non-source files
-            continue;
-        }
+        let source_type = SourceType::from_path(absolute_path.clone()).unwrap();
         let source_text: String = fs::read_to_string(&absolute_path).unwrap();
-        let result = imports::collect_imports(source_type.unwrap(), source_text.as_str());
+        let result = imports::collect_imports(source_type, source_text.as_str());
         errors.extend(result.errors);
         let parent_path = absolute_path.parent().unwrap();
-        let mut imports: Vec<PathBuf> = Vec::new();
         for import_path in result.imports_paths.iter() {
-            let resolve_result = resolver.resolve(parent_path, import_path.as_str());
-            match resolve_result {
-                Ok(resolution) => imports.push(current_dir.join(resolution.path())),
+            match resolver.resolve(parent_path, import_path.as_str()) {
                 Err(e) => match e {
                     ResolveError::Builtin(_) => {} // Skip builtins
                     _ => {
                         errors.push(e.to_string());
                     }
                 },
-            }
-        }
+                Ok(resolution) => {
+                    let import = current_dir.join(resolution.path());
+                    if affected.contains(&import) {
+                        extend_affected(&mut affected, &absolute_path, &dependents_map);
+                    } else if dependents_map.contains_key(&import) {
+                        let dependents: &mut HashSet<PathBuf> =
+                            dependents_map.get_mut(&import).unwrap();
+                        dependents.insert(absolute_path.clone());
+                    } else {
+                        dependents_map.insert(
+                            import.clone(),
+                            HashSet::from_iter(vec![absolute_path.clone()]),
+                        );
 
-        for import in imports {
-            if affected.contains(&import) {
-                affected.extend(import_graph.clone().into_iter());
-            } else if !visited.contains(&import) {
-                unvisited.push((
-                    import.clone(),
-                    [import_graph.clone(), vec![import.clone()]].concat(),
-                ));
+                        // Skip node_modules
+                        if import.components().any(|c| {
+                            module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
+                        }) {
+                            continue;
+                        }
+
+                        // Skip non-source files
+                        match import.extension() {
+                            None => {}
+                            Some(ext) => {
+                                if VALID_EXTENSIONS.contains(&ext.to_str().unwrap()) {
+                                    unvisited.push(import);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -198,6 +220,17 @@ mod tests {
             test_files.to_vec(),
             vec!["fixtures/nested/another-module.js"],
         );
+    }
+
+    #[test]
+    fn test_all_nested() {
+        let test_files = [
+            "fixtures/nested/all.js",
+            "fixtures/nested/circular.spec.js",
+            "fixtures/nested/module.js",
+            "fixtures/nested/assets.js",
+        ];
+        assert_unaffected(test_files.to_vec(), vec!["fixtures/nested/file.jsson"]);
     }
 
     #[test]
