@@ -28,5 +28,6 @@ node_modules
 
 /napi/*
 !/napi/src
+!/napi/test
 !/napi/*.rs
 !/napi/Cargo.toml
