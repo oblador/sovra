@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "build": "napi build --platform --release --package-json-path npm/package.json --manifest-path napi/Cargo.toml",
-    "build:debug": "napi build --platform --package-json-path npm/package.json --manifest-path napi/Cargo.toml",
+    "build": "napi build --platform --release --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml",
+    "build:debug": "napi build --platform --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml",
     "prepublishOnly": "napi pre-publish -t npm"
   },
   "devDependencies": {
@@ -19,5 +19,6 @@
   "funding": {
     "url": "https://github.com/sponsors/oblador"
   },
-  "optionalDependencies": {}
+  "optionalDependencies": {},
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
 }

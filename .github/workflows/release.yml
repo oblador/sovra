@@ -1,0 +1,214 @@
+name: Release NPM Package
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - npm/sovra/package.json # Please only commit this file, so we don't need to wait for test CI to pass.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ env.version }}
+      version_changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version changes
+        uses: EndBug/version-check@v2
+        id: version
+        with:
+          static-checking: localIsNew
+          file-url: https://unpkg.com/sovra@latest/package.json
+          file-name: npm/sovra/package.json
+
+      - name: Set version name
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          echo "Version change found! New version: ${{ steps.version.outputs.version }} (${{ steps.version.outputs.version_type }})"
+          echo "version=${{ steps.version.outputs.version }}" >> $GITHUB_ENV
+
+  build:
+    needs: check
+    if: needs.check.outputs.version_changed == 'true'
+    env:
+      version: ${{ needs.check.outputs.version }}
+    outputs:
+      version: ${{ env.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            code-target: win32-x64-msvc
+
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            code-target: win32-arm64-msvc
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            code-target: linux-x64-gnu
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            code-target: linux-arm64-gnu
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            code-target: linux-x64-musl
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            code-target: linux-arm64-musl
+
+          - os: macos-13
+            target: x86_64-apple-darwin
+            code-target: darwin-x64
+
+          - os: macos-14 # M1
+            target: aarch64-apple-darwin
+            code-target: darwin-arm64
+
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      ### install musl dependencies ###
+      #
+      - uses: mlugg/setup-zig@v1
+        if: ${{ contains(matrix.target, 'musl') }}
+        with:
+          version: 0.11.0
+
+      - name: Install cargo-zigbuild
+        if: ${{ contains(matrix.target, 'musl') }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      ### install non-musl dependencies ###
+
+      - name: Install cross
+        if: ${{ !contains(matrix.target, 'musl') }}
+        uses: taiki-e/install-action@cross
+
+      ### Build
+
+      - name: Add Rust Target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build with cross
+        if: ${{ !contains(matrix.target, 'musl') }}
+        run: cross build --release -p sovra_napi --target=${{ matrix.target }}
+
+      - name: Build with zig
+        if: ${{ contains(matrix.target, 'musl') }}
+        env:
+          RUSTFLAGS: "-C target-feature=-crt-static"
+        run: cargo zigbuild --release -p sovra_napi --target=${{ matrix.target }}
+
+      ### Build Done
+
+      - name: Move file on ${{ matrix.os }}
+        run: |
+          shopt -s extglob
+          ls target/${{ matrix.target }}/release/*.@(so|dll|dylib)
+          mv target/${{ matrix.target }}/release/*.@(so|dll|dylib) napi/sovra.${{ matrix.code-target }}.node
+          ls napi
+
+      - name: Test
+        working-directory: napi
+        if: ${{ contains(matrix.target, 'x86') && !contains(matrix.target, 'musl') }} # Need docker for aarch64
+        run: node test/sanity.spec.mjs
+
+      # The binary is zipped to fix permission loss https://github.com/actions/upload-artifact#permission-loss
+      - name: Archive Binary
+        if: runner.os == 'Windows'
+        run: 7z a ${{ matrix.code-target }}.zip napi/sovra.${{ matrix.code-target }}.node
+
+      # The binary is zipped to fix permission loss https://github.com/actions/upload-artifact#permission-loss
+      - name: Archive Binary
+        if: runner.os != 'Windows'
+        run: tar czf ${{ matrix.code-target }}.tar.gz napi/sovra.${{ matrix.code-target }}.node
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: binaries-${{ matrix.code-target }}
+          path: |
+            *.zip
+            *.tar.gz
+
+  publish:
+    name: Publish NAPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Unzip
+        uses: montudor/action-zip@v1
+        with:
+          args: unzip -qq *.zip -d .
+
+      - name: Untar
+        run: ls *.gz | xargs -i tar xvf {}
+
+      - name: Generate npm packages
+        run: |
+          ls
+          ls napi
+          node npm/sovra/scripts/generate-packages.mjs
+          cat npm/sovra/package.json
+          for package in npm/sovra*
+          do
+            ls $package
+            cat $package/package.json
+            echo '----'
+          done
+
+      - name: Generate .npmrc
+        run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > .npmrc
+
+      - name: Publish npm packages
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # NOTE: The trailing slash on $package/ changes it to publishing the directory
+        run: |
+          # publish subpackages first
+          for package in npm/sovra-*
+          do
+            npm publish $package/ --provenance --access public
+          done
+          # publish root package last
+          npm publish npm/sovra/ --provenance --access public
