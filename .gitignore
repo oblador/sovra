@@ -23,8 +23,7 @@ Cargo.lock
 node_modules
 !/fixtures/modules/node_modules
 
-/npm/*/*
-!/npm/sovra/scripts
-!/npm/sovra/package.json
+/npm/*
+!/npm/sovra
 
 /napi/*.node
