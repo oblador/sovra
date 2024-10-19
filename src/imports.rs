@@ -49,9 +49,10 @@ impl<'a> Visit<'a> for CollectImports {
                 self.import_paths.insert(literal.value.to_string());
             }
             oxc_ast::ast::Expression::TemplateLiteral(literal) => {
-                if literal.expressions.len() == 0 && literal.quasis.len() == 1 {
-                    self.import_paths
-                        .insert(literal.quasis.first().unwrap().value.raw.to_string());
+                if literal.expressions.len() == 0 {
+                    if let Some(first) = literal.quasis.first() {
+                        self.import_paths.insert(first.value.raw.to_string());
+                    }
                 } else {
                     self.errors
                         .push("Import call must not have dynamic template literals".to_string());
@@ -66,9 +67,8 @@ impl<'a> Visit<'a> for CollectImports {
     }
 
     fn visit_export_named_declaration(&mut self, it: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
-        if it.source.is_some() {
-            self.import_paths
-                .insert(it.source.as_ref().unwrap().value.to_string());
+        if let Some(source) = &it.source {
+            self.import_paths.insert(source.value.to_string());
         }
         walk::walk_export_named_declaration(self, it);
     }

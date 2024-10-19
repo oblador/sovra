@@ -5,7 +5,7 @@ use std::{
 };
 
 use oxc_resolver::{ResolveError, Resolver};
-use oxc_span::{SourceType, VALID_EXTENSIONS};
+use oxc_span::SourceType;
 
 use crate::imports;
 
@@ -70,48 +70,45 @@ pub fn collect_affected(
             continue;
         }
 
-        let source_type = SourceType::from_path(absolute_path.clone()).unwrap();
-        let source_text: String = fs::read_to_string(&absolute_path).unwrap();
+        let Ok(source_type) = SourceType::from_path(absolute_path.clone()) else {
+            continue;
+        };
+        let Ok(source_text) = fs::read_to_string(&absolute_path) else {
+            errors.push(format!("Cannot read file: {}", absolute_path.display()));
+            continue;
+        };
         let result = imports::collect_imports(source_type, source_text.as_str());
         errors.extend(result.errors);
-        let parent_path = absolute_path.parent().unwrap();
-        for import_path in result.imports_paths.iter() {
-            match resolver.resolve(parent_path, import_path.as_str()) {
-                Err(e) => match e {
-                    ResolveError::Builtin(_) => {} // Skip builtins
-                    _ => {
-                        errors.push(e.to_string());
-                    }
-                },
-                Ok(resolution) => {
-                    let import = current_dir.join(resolution.path());
-                    if affected.contains(&import) {
-                        extend_affected(&mut affected, &absolute_path, &dependents_map);
-                    } else if dependents_map.contains_key(&import) {
-                        let dependents: &mut HashSet<PathBuf> =
-                            dependents_map.get_mut(&import).unwrap();
-                        dependents.insert(absolute_path.clone());
-                    } else {
-                        dependents_map.insert(
-                            import.clone(),
-                            HashSet::from_iter(vec![absolute_path.clone()]),
-                        );
-
-                        // Skip node_modules
-                        if import.components().any(|c| {
-                            module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
-                        }) {
-                            continue;
+        if let Some(parent_path) = absolute_path.parent() {
+            for import_path in result.imports_paths.iter() {
+                match resolver.resolve(parent_path, import_path.as_str()) {
+                    Err(e) => match e {
+                        ResolveError::Builtin(_) => {} // Skip builtins
+                        _ => {
+                            errors.push(e.to_string());
                         }
-
-                        // Skip non-source files
-                        match import.extension() {
-                            None => {}
-                            Some(ext) => {
-                                if VALID_EXTENSIONS.contains(&ext.to_str().unwrap()) {
-                                    unvisited.push(import);
-                                }
+                    },
+                    Ok(resolution) => {
+                        let import = current_dir.join(resolution.path());
+                        if affected.contains(&import) {
+                            extend_affected(&mut affected, &absolute_path, &dependents_map);
+                        } else if dependents_map.contains_key(&import) {
+                            if let Some(dependents) = dependents_map.get_mut(&import) {
+                                dependents.insert(absolute_path.clone());
                             }
+                        } else {
+                            dependents_map.insert(
+                                import.clone(),
+                                HashSet::from_iter(vec![absolute_path.clone()]),
+                            );
+
+                            // Skip node_modules
+                            if import.components().any(|c| {
+                                module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
+                            }) {
+                                continue;
+                            }
+                            unvisited.push(import);
                         }
                     }
                 }
