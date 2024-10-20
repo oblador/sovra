@@ -1,4 +1,5 @@
 # Sovra
+
 ### Rust-based Test Decider for JavaScript using Oxc
 
 Speed up your monorepo pipeline by only running the tests affected by your code diff.
@@ -11,10 +12,10 @@ Speed up your monorepo pipeline by only running the tests affected by your code 
 
 ## Features
 
-* **TypeScript** support, including path aliases
-* **Configurable** resolver, with support for extensions, export conditions and more
-* **High performance** because it is **written in Rust** using Oxc
-* Easy to use with **Node API**
+- **TypeScript** support, including path aliases
+- **Configurable** resolver, with support for extensions, export conditions and more
+- **High performance** because it is **written in Rust** using Oxc
+- Easy to use with **Node API**
 
 ## Installation
 
@@ -73,7 +74,7 @@ cargo test
 Imports using variables or expressions are not supported as they can only be determined during runtime:
 
 ```ts
-requre(process.env.SOME_VAR + ".js"); // ❌
+require(process.env.SOME_VAR + ".js"); // ❌
 import(`./file.${platform}.mjs`); // ❌
 ```
 
