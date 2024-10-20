@@ -72,11 +72,11 @@ pub fn collect_affected(
             continue;
         };
         let Ok(source_text) = fs::read_to_string(&absolute_path) else {
-            errors.push(format!("Cannot read file: {}", absolute_path.display()));
+            errors.push(format!("Cannot read file: {absolute_path:?}",));
             continue;
         };
         let result =
-            imports::collect_imports(source_type, source_text.as_str(), absolute_path.to_str());
+            imports::collect_imports(source_type, source_text.as_str(), Some(&absolute_path));
         errors.extend(result.errors);
         if let Some(parent_path) = absolute_path.parent() {
             for import_path in result.imports_paths.iter() {
@@ -84,7 +84,12 @@ pub fn collect_affected(
                     Err(e) => match e {
                         ResolveError::Builtin(_) => {} // Skip builtins
                         _ => {
-                            errors.push(e.to_string());
+                            let relative_path = absolute_path
+                                .strip_prefix(&current_dir)
+                                .unwrap()
+                                .to_str()
+                                .unwrap_or("unknown file");
+                            errors.push(format!("[{relative_path}]\n{e}"));
                         }
                     },
                     Ok(resolution) => {
@@ -302,8 +307,12 @@ mod tests {
 
     #[test]
     fn test_bad_import() {
-        let ret = collect_affected(vec!["fixtures/bad-import.js"], vec![], Resolver::default());
-        assert_eq!(ret.errors, vec!["Cannot find module 'bad-import'"]);
+        let file_name = "fixtures/bad-import.js";
+        let ret = collect_affected(vec![file_name], vec![], Resolver::default());
+        assert_eq!(
+            ret.errors,
+            vec![format!("[{file_name}]\nCannot find module 'bad-import'")]
+        );
     }
 
     #[test]

@@ -1,9 +1,9 @@
-use oxc::diagnostics::{Error, NamedSource};
+use oxc::diagnostics::{Error, NamedSource, OxcDiagnostic};
 use oxc_allocator::Allocator;
 use oxc_ast::{visit::walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, env, path::PathBuf, sync::Arc};
 
 pub struct ImportsReturn {
     pub errors: Vec<String>,
@@ -13,7 +13,7 @@ pub struct ImportsReturn {
 pub fn collect_imports(
     source_type: SourceType,
     source_text: &str,
-    source_filename: Option<&str>,
+    source_filename: Option<&PathBuf>,
 ) -> ImportsReturn {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source_text, source_type).parse();
@@ -23,13 +23,22 @@ pub fn collect_imports(
     let mut ast_pass = CollectImports::default();
     ast_pass.visit_program(&program);
 
-    let parse_errors = if parsed.errors.is_empty() {
+    let errors = if parsed.errors.is_empty() && ast_pass.errors.is_empty() {
         vec![]
     } else {
-        let file_name = source_filename.clone().unwrap_or_default();
+        let file_name = if source_filename.is_none() {
+            "unknown file"
+        } else {
+            source_filename
+                .unwrap()
+                .strip_prefix(env::current_dir().unwrap())
+                .unwrap()
+                .to_str()
+                .unwrap_or_default()
+        };
         let source = Arc::new(NamedSource::new(file_name, source_text.to_string()));
-        parsed
-            .errors
+        [parsed.errors, ast_pass.errors]
+            .concat()
             .into_iter()
             .map(|diagnostic| Error::from(diagnostic).with_source_code(Arc::clone(&source)))
             .map(|error| format!("{error:?}"))
@@ -37,7 +46,7 @@ pub fn collect_imports(
     };
 
     let ret = ImportsReturn {
-        errors: [parse_errors, ast_pass.errors].concat(),
+        errors,
         imports_paths: ast_pass.import_paths.into_iter().collect(),
     };
     ret
@@ -45,7 +54,7 @@ pub fn collect_imports(
 
 #[derive(Debug, Default)]
 struct CollectImports {
-    errors: Vec<String>,
+    errors: Vec<OxcDiagnostic>,
     import_paths: HashSet<String>,
 }
 
@@ -66,13 +75,17 @@ impl<'a> Visit<'a> for CollectImports {
                         self.import_paths.insert(first.value.raw.to_string());
                     }
                 } else {
-                    self.errors
-                        .push("Import call must not have dynamic template literals".to_string());
+                    self.errors.push(
+                        OxcDiagnostic::error("Import call must not have dynamic template literals")
+                            .with_label(it.span),
+                    );
                 }
             }
             _ => {
-                self.errors
-                    .push("Import call must have a string literal argument".to_string());
+                self.errors.push(
+                    OxcDiagnostic::error("Import call must not have dynamic template literals")
+                        .with_label(it.span),
+                );
             }
         }
         walk::walk_import_expression(self, it);
@@ -97,13 +110,17 @@ impl<'a> Visit<'a> for CollectImports {
                     self.import_paths.insert(literal.value.to_string());
                 }
                 None => {
-                    self.errors
-                        .push("Require call must have a string literal argument".to_string());
+                    self.errors.push(
+                        OxcDiagnostic::error("Require call must have a string literal argument")
+                            .with_label(it.span),
+                    );
                 }
             }
         } else if it.callee_name().is_some_and(|n| n == "require") {
-            self.errors
-                .push("Require call must have a string literal argument".to_string());
+            self.errors.push(
+                OxcDiagnostic::error("Require call must have a string literal argument")
+                    .with_label(it.span),
+            );
         }
         walk::walk_call_expression(self, it);
     }
