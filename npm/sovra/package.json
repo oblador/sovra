@@ -1,6 +1,6 @@
 {
   "name": "sovra",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Rust-based Test Decider using Oxc",
   "main": "index.js",
   "files": [
