@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     env, fs,
     path::PathBuf,
 };
@@ -41,7 +41,7 @@ pub fn collect_affected(
     let current_dir = env::current_dir().unwrap();
     let module_paths: HashSet<&str> =
         HashSet::from_iter(resolver.options().modules.iter().map(|m| m.as_str()));
-    let mut affected: HashSet<PathBuf> = HashSet::from_iter(
+    let mut affected = HashSet::from_iter(
         changed_files
             .into_iter()
             .map(|p| current_dir.join(p).to_path_buf())
@@ -55,16 +55,14 @@ pub fn collect_affected(
             .map(|p: &&str| (*p, current_dir.join(p).to_path_buf()))
             .collect::<Vec<_>>(),
     );
-    let mut unvisited: Vec<PathBuf> = test_files_path_map
+    let mut unvisited = test_files_path_map
         .values()
         .cloned()
         .filter(|p| !affected.contains(p))
-        .collect::<Vec<_>>();
+        .collect::<VecDeque<_>>();
     let mut dependents_map: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
 
-    while !unvisited.is_empty() {
-        let absolute_path = unvisited[0].clone();
-        unvisited.remove(0);
+    while let Some(absolute_path) = unvisited.pop_front() {
         if affected.contains(&absolute_path) {
             extend_affected(&mut affected, &absolute_path, &dependents_map);
             continue;
@@ -108,7 +106,7 @@ pub fn collect_affected(
                             }) {
                                 continue;
                             }
-                            unvisited.push(import);
+                            unvisited.push_back(import);
                         }
                     }
                 }
