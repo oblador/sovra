@@ -1,15 +1,20 @@
+use oxc::diagnostics::{Error, NamedSource};
 use oxc_allocator::Allocator;
 use oxc_ast::{visit::walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 pub struct ImportsReturn {
     pub errors: Vec<String>,
     pub imports_paths: Vec<String>,
 }
 
-pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsReturn {
+pub fn collect_imports(
+    source_type: SourceType,
+    source_text: &str,
+    source_filename: Option<&str>,
+) -> ImportsReturn {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source_text, source_type).parse();
 
@@ -18,14 +23,21 @@ pub fn collect_imports(source_type: SourceType, source_text: &str) -> ImportsRet
     let mut ast_pass = CollectImports::default();
     ast_pass.visit_program(&program);
 
-    let mut errors = parsed
-        .errors
-        .into_iter()
-        .map(|e| e.with_source_code(source_text.to_owned()).to_string())
-        .collect::<Vec<_>>();
-    errors.append(&mut ast_pass.errors);
+    let parse_errors = if parsed.errors.is_empty() {
+        vec![]
+    } else {
+        let file_name = source_filename.clone().unwrap_or_default();
+        let source = Arc::new(NamedSource::new(file_name, source_text.to_string()));
+        parsed
+            .errors
+            .into_iter()
+            .map(|diagnostic| Error::from(diagnostic).with_source_code(Arc::clone(&source)))
+            .map(|error| format!("{error:?}"))
+            .collect()
+    };
+
     let ret = ImportsReturn {
-        errors: errors,
+        errors: [parse_errors, ast_pass.errors].concat(),
         imports_paths: ast_pass.import_paths.into_iter().collect(),
     };
     ret
@@ -102,7 +114,7 @@ mod tests {
     use super::*;
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
-        let ret = collect_imports(SourceType::mjs(), source_text);
+        let ret = collect_imports(SourceType::mjs(), source_text, None);
         // Convert to HashSet to ignore order
         let expected: HashSet<String> =
             HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
@@ -112,7 +124,7 @@ mod tests {
     }
 
     fn asset_error(source_text: &str) {
-        let ret = collect_imports(SourceType::mjs(), source_text);
+        let ret = collect_imports(SourceType::mjs(), source_text, None);
         assert!(!ret.errors.is_empty());
         assert!(ret.imports_paths.is_empty());
     }
@@ -177,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_empty_require() {
-        let ret = collect_imports(SourceType::mjs(), "require('snel'); require();");
+        let ret = collect_imports(SourceType::mjs(), "require('snel'); require();", None);
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
     }
@@ -187,6 +199,7 @@ mod tests {
         let ret = collect_imports(
             SourceType::mjs(),
             "require('snel'); const path = 'hest'; require(path);",
+            None,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -197,6 +210,7 @@ mod tests {
         let ret = collect_imports(
             SourceType::mjs(),
             "import 'snel'; const path = 'hest'; import(path);",
+            None,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -207,6 +221,7 @@ mod tests {
         let ret = collect_imports(
             SourceType::mjs(),
             "import 'snel'; const path = 'hest'; import(`${path}`);",
+            None,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -217,13 +232,18 @@ mod tests {
         let ret = collect_imports(
             SourceType::mjs(),
             "const path = 'hest'; require(`${path}`);",
+            None,
         );
         assert!(!ret.errors.is_empty());
     }
 
     #[test]
     fn test_dynamic_import() {
-        let ret = collect_imports(SourceType::mjs(), "import 'snel'; import('he' + 'st');");
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "import 'snel'; import('he' + 'st');",
+            None,
+        );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
     }

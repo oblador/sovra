@@ -75,7 +75,8 @@ pub fn collect_affected(
             errors.push(format!("Cannot read file: {}", absolute_path.display()));
             continue;
         };
-        let result = imports::collect_imports(source_type, source_text.as_str());
+        let result =
+            imports::collect_imports(source_type, source_text.as_str(), absolute_path.to_str());
         errors.extend(result.errors);
         if let Some(parent_path) = absolute_path.parent() {
             for import_path in result.imports_paths.iter() {
@@ -115,10 +116,10 @@ pub fn collect_affected(
     }
 
     let ret: AffectedReturn = AffectedReturn {
-        errors: errors,
+        errors,
         files: test_files_path_map
             .iter()
-            .filter(|(_f, p)| affected.contains(p.to_owned()))
+            .filter(|(_f, p)| affected.contains(*p))
             .map(|(f, _)| f.to_string())
             .collect(),
     };
