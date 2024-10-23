@@ -4,7 +4,7 @@
 
 Speed up your monorepo pipeline by only running the tests affected by your code diff.
 
-![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/trastknast) ![GitHub followers](https://img.shields.io/github/followers/oblador)
+[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/trastknast)](https://x.com/trastknast) [![GitHub followers](https://img.shields.io/github/followers/oblador)](https://github.com/oblador)
 
 ---
 
