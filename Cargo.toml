@@ -14,19 +14,20 @@ keywords     = ["node", "oxc", "test", "test-decider", "affected"]
 license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/oblador/sovra"
-rust-version = "1.70"
+rust-version = "1.93"
 include      = ["/src"]
 
 [lib]
 doctest = false
 
 [dependencies]
-oxc           = "0.32.0"
-oxc_allocator = "0.32.0"
-oxc_ast       = "0.32.0"
-oxc_parser    = "0.32.0"
-oxc_resolver  = "1.12.0"
-oxc_span      = "0.32.0"
+oxc           = "0.128.0"
+oxc_allocator = "0.128.0"
+oxc_ast       = "0.128.0"
+oxc_ast_visit = "0.128.0"
+oxc_parser    = "0.128.0"
+oxc_resolver  = "11.19.1"
+oxc_span      = "0.128.0"
 
 # For napi
 [profile.release]

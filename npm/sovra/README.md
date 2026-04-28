@@ -25,17 +25,18 @@ yarn add sovra
 
 ## Usage
 
-### `getAffected(testFiles: string[], changedFiles: string[], resolverOptions: OxcResolverOptions)`
+### `getAffected(testFiles: string[], changedFiles: string[], resolverOptions: OxcResolverOptions, ignoreTypeImports?: boolean)`
 
 Returns a subset of `testFiles` that have `changedFiles` in their import graph. This is useful in order to determine which tests to run in a large repo.
 
 #### Arguments
 
-| Name              | Description                                                                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `testFiles`       | List of files to check if they were affected by changes                                                                             |
-| `changedFiles`    | List of changed files                                                                                                               |
-| `resolverOptions` | Configuration on how to resolve imports, see [oxc-resolver](https://github.com/oxc-project/oxc-resolver?tab=readme-ov-file#options) |
+| Name                 | Description                                                                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `testFiles`          | List of files to check if they were affected by changes                                                                                                                                                                    |
+| `changedFiles`       | List of changed files                                                                                                                                                                                                      |
+| `resolverOptions`    | Configuration on how to resolve imports, see [oxc-resolver](https://github.com/oxc-project/oxc-resolver?tab=readme-ov-file#options)                                                                                        |
+| `ignoreTypeImports`  | When `true`, type-only imports `import type` are excluded from the import graph so changes to files that are only referenced for their types do not affect tests. Defaults to `false`.            |
 
 #### Example
 

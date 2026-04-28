@@ -25,12 +25,14 @@ pub fn get_affected(
     test_files: Vec<String>,
     changed_files: Vec<String>,
     resolve_options: NapiResolveOptions,
+    ignore_type_imports: Option<bool>,
 ) -> AffectedResult {
     let resolver = Resolver::new(normalize_options(resolve_options));
     let affected = collect_affected(
         test_files.iter().map(AsRef::as_ref).collect(),
         changed_files.iter().map(AsRef::as_ref).collect(),
         resolver,
+        ignore_type_imports.unwrap_or(false),
     );
     AffectedResult {
         files: affected.files,
@@ -42,6 +44,10 @@ fn normalize_options(op: NapiResolveOptions) -> ResolveOptions {
     let default = ResolveOptions::default();
     // merging options
     ResolveOptions {
+        cwd: default.cwd,
+        module_type: default.module_type,
+        node_path: default.node_path,
+        allow_package_exports_in_directory_resolve: default.allow_package_exports_in_directory_resolve,
         tsconfig: op.tsconfig.map(|tsconfig| tsconfig.into()),
         alias: op
             .alias
@@ -70,7 +76,6 @@ fn normalize_options(op: NapiResolveOptions) -> ResolveOptions {
             })
             .unwrap_or(default.alias_fields),
         condition_names: op.condition_names.unwrap_or(default.condition_names),
-        description_files: op.description_files.unwrap_or(default.description_files),
         enforce_extension: default.enforce_extension,
         exports_fields: op
             .exports_fields

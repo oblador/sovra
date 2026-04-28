@@ -37,6 +37,7 @@ pub fn collect_affected(
     test_files: Vec<&str>,
     changed_files: Vec<&str>,
     resolver: Resolver,
+    ignore_type_imports: bool,
 ) -> AffectedReturn {
     let current_dir = env::current_dir().unwrap();
     let module_paths: HashSet<&str> =
@@ -75,14 +76,18 @@ pub fn collect_affected(
             errors.push(format!("Cannot read file: {absolute_path:?}",));
             continue;
         };
-        let result =
-            imports::collect_imports(source_type, source_text.as_str(), Some(&absolute_path));
+        let result = imports::collect_imports(
+            source_type,
+            source_text.as_str(),
+            Some(&absolute_path),
+            ignore_type_imports,
+        );
         errors.extend(result.errors);
         if let Some(parent_path) = absolute_path.parent() {
             for import_path in result.imports_paths.iter() {
                 match resolver.resolve(parent_path, import_path.as_str()) {
                     Err(e) => match e {
-                        ResolveError::Builtin(_) => {} // Skip builtins
+                        ResolveError::Builtin { .. } => {} // Skip builtins
                         _ => {
                             let relative_path = absolute_path
                                 .strip_prefix(&current_dir)
@@ -135,7 +140,7 @@ pub fn collect_affected(
 mod tests {
     use std::vec;
 
-    use oxc_resolver::{ResolveOptions, TsconfigOptions, TsconfigReferences};
+    use oxc_resolver::{ResolveOptions, TsconfigDiscovery, TsconfigOptions, TsconfigReferences};
 
     use super::*;
 
@@ -145,7 +150,17 @@ mod tests {
         expected: Vec<&str>,
         resolver: Resolver,
     ) {
-        let ret = collect_affected(test_files, changed_files, resolver);
+        assert_collect_affected_with(test_files, changed_files, expected, resolver, false);
+    }
+
+    fn assert_collect_affected_with(
+        test_files: Vec<&str>,
+        changed_files: Vec<&str>,
+        expected: Vec<&str>,
+        resolver: Resolver,
+        ignore_type_imports: bool,
+    ) {
+        let ret = collect_affected(test_files, changed_files, resolver, ignore_type_imports);
         let expected: HashSet<String> = HashSet::from_iter(expected.iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.files.iter().map(|s| s.to_string()));
         let no_errors: Vec<String> = vec![];
@@ -169,6 +184,19 @@ mod tests {
             vec![],
             Resolver::new(ResolveOptions::default()),
         );
+    }
+
+    fn ts_resolver() -> Resolver {
+        Resolver::new(ResolveOptions {
+            extensions: vec![".ts".into()],
+            tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
+                config_file: env::current_dir()
+                    .unwrap()
+                    .join("fixtures/typescript/tsconfig.json"),
+                references: TsconfigReferences::Auto,
+            })),
+            ..ResolveOptions::default()
+        })
     }
 
     #[test]
@@ -244,12 +272,12 @@ mod tests {
             test_files,
             Resolver::new(ResolveOptions {
                 extensions: vec![".ts".into()],
-                tsconfig: Some(TsconfigOptions {
+                tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
                     config_file: env::current_dir()
                         .unwrap()
                         .join("fixtures/typescript/tsconfig.json"),
                     references: TsconfigReferences::Auto,
-                }),
+                })),
                 ..ResolveOptions::default()
             }),
         );
@@ -263,16 +291,37 @@ mod tests {
             test_files.clone(),
             changed_files,
             test_files,
-            Resolver::new(ResolveOptions {
-                extensions: vec![".ts".into()],
-                tsconfig: Some(TsconfigOptions {
-                    config_file: env::current_dir()
-                        .unwrap()
-                        .join("fixtures/typescript/tsconfig.json"),
-                    references: TsconfigReferences::Auto,
-                }),
-                ..ResolveOptions::default()
-            }),
+            ts_resolver(),
+        );
+    }
+
+    #[test]
+    fn test_type_import_ignored() {
+        // With `ignore_type_imports = true` a file that only depends on `aliased.ts`
+        // through `import type` must no longer be considered affected.
+        let test_files = vec!["fixtures/typescript/type-import.ts"];
+        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        assert_collect_affected_with(
+            test_files,
+            changed_files,
+            vec![],
+            ts_resolver(),
+            true,
+        );
+    }
+
+    #[test]
+    fn test_type_import_ignored_value_import_still_affected() {
+        // Files with a real value import of the changed file remain affected
+        // even when `ignore_type_imports = true`.
+        let test_files = vec!["fixtures/typescript/suite.spec.ts"];
+        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        assert_collect_affected_with(
+            test_files.clone(),
+            changed_files,
+            test_files,
+            ts_resolver(),
+            true,
         );
     }
 
@@ -308,7 +357,7 @@ mod tests {
     #[test]
     fn test_bad_import() {
         let file_name = "fixtures/bad-import.js";
-        let ret = collect_affected(vec![file_name], vec![], Resolver::default());
+        let ret = collect_affected(vec![file_name], vec![], Resolver::default(), false);
         assert_eq!(
             ret.errors,
             vec![format!("[{file_name}]\nCannot find module 'bad-import'")]

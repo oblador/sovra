@@ -1,6 +1,6 @@
 use oxc::diagnostics::{Error, NamedSource, OxcDiagnostic};
 use oxc_allocator::Allocator;
-use oxc_ast::{visit::walk, Visit};
+use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::{collections::HashSet, env, path::PathBuf, sync::Arc};
@@ -14,13 +14,17 @@ pub fn collect_imports(
     source_type: SourceType,
     source_text: &str,
     source_filename: Option<&PathBuf>,
+    ignore_type_imports: bool,
 ) -> ImportsReturn {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source_text, source_type).parse();
 
     let program = parsed.program;
 
-    let mut ast_pass = CollectImports::default();
+    let mut ast_pass = CollectImports {
+        ignore_type_imports,
+        ..CollectImports::default()
+    };
     ast_pass.visit_program(&program);
 
     let errors = if parsed.errors.is_empty() && ast_pass.errors.is_empty() {
@@ -52,14 +56,44 @@ pub fn collect_imports(
     ret
 }
 
+fn is_type_only_import(it: &oxc_ast::ast::ImportDeclaration<'_>) -> bool {
+    if it.import_kind.is_type() {
+        return true;
+    }
+    let Some(specifiers) = &it.specifiers else {
+        return false;
+    };
+    if specifiers.is_empty() {
+        return false;
+    }
+    specifiers.iter().all(|spec| match spec {
+        oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => s.import_kind.is_type(),
+        _ => false,
+    })
+}
+
+fn is_type_only_named_export(it: &oxc_ast::ast::ExportNamedDeclaration<'_>) -> bool {
+    if it.export_kind.is_type() {
+        return true;
+    }
+    if it.specifiers.is_empty() {
+        return false;
+    }
+    it.specifiers.iter().all(|spec| spec.export_kind.is_type())
+}
+
 #[derive(Debug, Default)]
 struct CollectImports {
     errors: Vec<OxcDiagnostic>,
     import_paths: HashSet<String>,
+    ignore_type_imports: bool,
 }
 
 impl<'a> Visit<'a> for CollectImports {
     fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
+        if self.ignore_type_imports && is_type_only_import(it) {
+            return;
+        }
         self.import_paths.insert(it.source.value.to_string());
         walk::walk_import_declaration(self, it);
     }
@@ -92,6 +126,9 @@ impl<'a> Visit<'a> for CollectImports {
     }
 
     fn visit_export_named_declaration(&mut self, it: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
+        if self.ignore_type_imports && is_type_only_named_export(it) {
+            return;
+        }
         if let Some(source) = &it.source {
             self.import_paths.insert(source.value.to_string());
         }
@@ -99,6 +136,9 @@ impl<'a> Visit<'a> for CollectImports {
     }
 
     fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
+        if self.ignore_type_imports && it.export_kind.is_type() {
+            return;
+        }
         self.import_paths.insert(it.source.value.to_string());
         walk::walk_export_all_declaration(self, it);
     }
@@ -131,7 +171,7 @@ mod tests {
     use super::*;
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
-        let ret = collect_imports(SourceType::mjs(), source_text, None);
+        let ret = collect_imports(SourceType::mjs(), source_text, None, false);
         // Convert to HashSet to ignore order
         let expected: HashSet<String> =
             HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
@@ -140,8 +180,21 @@ mod tests {
         assert!(ret.errors.is_empty());
     }
 
+    fn assert_ts_imports(
+        source_text: &str,
+        expected_imports: Vec<&str>,
+        ignore_type_imports: bool,
+    ) {
+        let ret = collect_imports(SourceType::ts(), source_text, None, ignore_type_imports);
+        let expected: HashSet<String> =
+            HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
+        let actual: HashSet<String> = HashSet::from_iter(ret.imports_paths.into_iter());
+        assert_eq!(expected, actual);
+        assert!(ret.errors.is_empty());
+    }
+
     fn asset_error(source_text: &str) {
-        let ret = collect_imports(SourceType::mjs(), source_text, None);
+        let ret = collect_imports(SourceType::mjs(), source_text, None, false);
         assert!(!ret.errors.is_empty());
         assert!(ret.imports_paths.is_empty());
     }
@@ -206,7 +259,12 @@ mod tests {
 
     #[test]
     fn test_empty_require() {
-        let ret = collect_imports(SourceType::mjs(), "require('snel'); require();", None);
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "require('snel'); require();",
+            None,
+            false,
+        );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
     }
@@ -217,6 +275,7 @@ mod tests {
             SourceType::mjs(),
             "require('snel'); const path = 'hest'; require(path);",
             None,
+            false,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -228,6 +287,7 @@ mod tests {
             SourceType::mjs(),
             "import 'snel'; const path = 'hest'; import(path);",
             None,
+            false,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -239,6 +299,7 @@ mod tests {
             SourceType::mjs(),
             "import 'snel'; const path = 'hest'; import(`${path}`);",
             None,
+            false,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -250,6 +311,7 @@ mod tests {
             SourceType::mjs(),
             "const path = 'hest'; require(`${path}`);",
             None,
+            false,
         );
         assert!(!ret.errors.is_empty());
     }
@@ -260,8 +322,94 @@ mod tests {
             SourceType::mjs(),
             "import 'snel'; import('he' + 'st');",
             None,
+            false,
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
+    }
+
+    #[test]
+    fn test_ignore_type_import_default_keeps_type_imports() {
+        assert_ts_imports(
+            "import type { Snel } from 'hest';",
+            vec!["hest"],
+            false,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_type_only_import() {
+        assert_ts_imports("import type { Snel } from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_default_type_import() {
+        assert_ts_imports("import type Snel from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_keeps_value_imports() {
+        assert_ts_imports(
+            "import type { Snel } from 'hest'; import { rein } from 'snel';",
+            vec!["snel"],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_keeps_mixed_specifier_import() {
+        // Value-bearing specifier (`rein`) means the module still runs at runtime.
+        assert_ts_imports(
+            "import { type Snel, rein } from 'hest';",
+            vec!["hest"],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_specifier_type_modifier() {
+        // `import { type X } from 'foo'` — declaration kind is value, but every
+        // specifier is `type`-only, so the source contributes only types.
+        assert_ts_imports("import { type Snel } from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_all_specifier_type_modifiers() {
+        assert_ts_imports(
+            "import { type Snel, type Rein } from 'hest';",
+            vec![],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_keeps_side_effect_import() {
+        // `import 'foo'` has runtime side effects regardless of types.
+        assert_ts_imports("import 'hest';", vec!["hest"], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_type_export_named() {
+        assert_ts_imports("export type { Snel } from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_specifier_type_export() {
+        // `export { type X } from 'foo'` — barrel that re-exports only types.
+        assert_ts_imports("export { type Snel } from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_keeps_mixed_specifier_export() {
+        assert_ts_imports(
+            "export { type Snel, rein } from 'hest';",
+            vec!["hest"],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_type_export_all() {
+        assert_ts_imports("export type * from 'hest';", vec![], true);
     }
 }

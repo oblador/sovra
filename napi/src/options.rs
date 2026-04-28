@@ -42,11 +42,6 @@ pub struct NapiResolveOptions {
     /// Default `[]`
     pub condition_names: Option<Vec<String>>,
 
-    /// The JSON files to use for descriptions. (There was once a `bower.json`.)
-    ///
-    /// Default `["package.json"]`
-    pub description_files: Option<Vec<String>>,
-
     /// A list of exports fields in description files.
     /// Can be a path to json object such as `["path", "to", "exports"]`.
     ///
@@ -150,7 +145,6 @@ pub struct NapiResolveOptions {
 #[derive(Debug, Clone)]
 pub struct Restriction {
     pub path: Option<String>,
-    pub regex: Option<String>,
 }
 
 /// Tsconfig Options
@@ -168,43 +162,29 @@ pub struct TsconfigOptions {
     /// Support for Typescript Project References.
     ///
     /// * `'auto'`: use the `references` field from tsconfig of `config_file`.
-    /// * `string[]`: manually provided relative or absolute path.
-    #[napi(ts_type = "'auto' | string[]")]
-    pub references: Option<Either<String, Vec<String>>>,
+    /// * any other value disables Project References resolution.
+    #[napi(ts_type = "'auto' | 'disabled'")]
+    pub references: Option<String>,
 }
 
-impl Into<oxc_resolver::Restriction> for Restriction {
-    fn into(self) -> oxc_resolver::Restriction {
-        match (self.path, self.regex) {
-            (None, None) => {
-                panic!("Should specify path or regex")
-            }
-            (None, Some(regex)) => oxc_resolver::Restriction::RegExp(regex),
-            (Some(path), None) => oxc_resolver::Restriction::Path(PathBuf::from(path)),
-            (Some(_), Some(_)) => {
-                panic!("Restriction can't be path and regex at the same time")
-            }
+impl From<Restriction> for oxc_resolver::Restriction {
+    fn from(value: Restriction) -> Self {
+        match value.path {
+            Some(path) => oxc_resolver::Restriction::Path(PathBuf::from(path)),
+            None => panic!("Should specify path"),
         }
     }
 }
 
-impl Into<oxc_resolver::TsconfigOptions> for TsconfigOptions {
-    fn into(self) -> oxc_resolver::TsconfigOptions {
-        oxc_resolver::TsconfigOptions {
-            config_file: PathBuf::from(self.config_file),
-            references: match self.references {
-                Some(Either::A(string)) if string.as_str() == "auto" => {
-                    oxc_resolver::TsconfigReferences::Auto
-                }
-                Some(Either::A(opt)) => {
-                    panic!("`{}` is not a valid option for  tsconfig references", opt)
-                }
-                Some(Either::B(paths)) => oxc_resolver::TsconfigReferences::Paths(
-                    paths.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
-                ),
-                None => oxc_resolver::TsconfigReferences::Disabled,
+impl From<TsconfigOptions> for oxc_resolver::TsconfigDiscovery {
+    fn from(value: TsconfigOptions) -> Self {
+        oxc_resolver::TsconfigDiscovery::Manual(oxc_resolver::TsconfigOptions {
+            config_file: PathBuf::from(value.config_file),
+            references: match value.references.as_deref() {
+                Some("auto") => oxc_resolver::TsconfigReferences::Auto,
+                _ => oxc_resolver::TsconfigReferences::Disabled,
             },
-        }
+        })
     }
 }
 

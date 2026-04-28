@@ -5,7 +5,7 @@ export interface AffectedResult {
   errors: Array<string>
 }
 
-export declare function getAffected(testFiles: Array<string>, changedFiles: Array<string>, resolveOptions: NapiResolveOptions): AffectedResult
+export declare function getAffected(testFiles: Array<string>, changedFiles: Array<string>, resolveOptions: NapiResolveOptions, ignoreTypeImports?: boolean | undefined | null): AffectedResult
 
 /**
  * Module Resolution Options
@@ -45,12 +45,6 @@ export interface NapiResolveOptions {
    * Default `[]`
    */
   conditionNames?: Array<string>
-  /**
-   * The JSON files to use for descriptions. (There was once a `bower.json`.)
-   *
-   * Default `["package.json"]`
-   */
-  descriptionFiles?: Array<string>
   /**
    * A list of exports fields in description files.
    * Can be a path to json object such as `["path", "to", "exports"]`.
@@ -167,7 +161,6 @@ export interface NapiResolveOptions {
  */
 export interface Restriction {
   path?: string
-  regex?: string
 }
 
 /**
@@ -187,8 +180,7 @@ export interface TsconfigOptions {
    * Support for Typescript Project References.
    *
    * * `'auto'`: use the `references` field from tsconfig of `config_file`.
-   * * `string[]`: manually provided relative or absolute path.
+   * * any other value disables Project References resolution.
    */
-  references?: 'auto' | string[]
+  references?: 'auto' | 'disabled'
 }
-
