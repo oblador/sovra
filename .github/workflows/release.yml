@@ -1,5 +1,7 @@
 name: Release NPM Package
 
+permissions: {}
+
 on:
   push:
     branches:
@@ -23,7 +25,7 @@ jobs:
       version: ${{ env.version }}
       version_changed: ${{ steps.version.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check version changes
         uses: EndBug/version-check@v2
@@ -85,17 +87,17 @@ jobs:
     name: Package ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup
         uses: ./.github/actions/setup
 
       ### install musl dependencies ###
-      #
-      - uses: mlugg/setup-zig@v1
+
+      - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.target, 'musl') }}
         with:
-          version: 0.11.0
+          version: 0.13.0
 
       - name: Install cargo-zigbuild
         if: ${{ contains(matrix.target, 'musl') }}
@@ -107,7 +109,9 @@ jobs:
 
       - name: Install cross
         if: ${{ !contains(matrix.target, 'musl') }}
-        uses: taiki-e/install-action@cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       ### Build
 
@@ -136,7 +140,7 @@ jobs:
       - name: Test
         working-directory: napi
         if: ${{ contains(matrix.target, 'x86') && !contains(matrix.target, 'musl') }} # Need docker for aarch64
-        run: node test/sanity.spec.mjs
+        run: node --test test/sanity.spec.mjs
 
       # The binary is zipped to fix permission loss https://github.com/actions/upload-artifact#permission-loss
       - name: Archive Binary
@@ -166,7 +170,7 @@ jobs:
     needs:
       - build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -177,12 +181,11 @@ jobs:
           merge-multiple: true
 
       - name: Unzip
-        uses: montudor/action-zip@v1
-        with:
-          args: unzip -qq *.zip -d .
+        run: |
+          for archive in *.zip; do unzip -qq -o "$archive" -d .; done
 
       - name: Untar
-        run: ls *.gz | xargs -i tar xvf {}
+        run: ls *.gz | xargs -I {} tar xvf {}
 
       - name: Generate npm packages
         run: |

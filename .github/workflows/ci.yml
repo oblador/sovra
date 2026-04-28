@@ -1,25 +1,26 @@
-#
 name: CI
+
+permissions: {}
 
 on:
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize]
-    paths-ignore:
+    paths-ignore: &paths-ignore
       - "**/*.md"
-      - "**/*.yml"
       - "!.github/workflows/ci.yml"
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/*.md"
-      - "**/*.yml"
-      - "!.github/workflows/ci.yml"
+    paths-ignore: *paths-ignore
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   test:
@@ -29,25 +30,24 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-          - os: macos-14
+          - os: macos-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: Boshen/setup-rust@main
+      - uses: actions/checkout@v6
+      - uses: oxc-project/setup-rust@v1.0.16
         with:
           # warm cache factory for all other CI jobs
           # cache `target` directory to avoid download crates
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: warm
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
       - name: Fixture workspace
         working-directory: fixtures/yarn-workspace
         run: yarn install --immutable
-        shell: bash
-      - run: cargo check
+      - run: cargo check --locked
       - run: cargo test
       - run: git diff --exit-code # Must commit everything
 
@@ -55,13 +55,12 @@ jobs:
     name: Test NAPI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Boshen/setup-rust@main
+      - uses: actions/checkout@v6
+      - uses: oxc-project/setup-rust@v1.0.16
         with:
-          # warm cache factory for all other CI jobs
-          # cache `target` directory to avoid download crates
           save-cache: ${{ github.ref_name == 'main' }}
           cache-key: warm
       - uses: ./.github/actions/setup
       - run: yarn build
-      - run: node napi/test/sanity.spec.mjs
+      - run: node --test napi/test/sanity.spec.mjs
+      - run: git diff --exit-code # Must commit generated bindings (index.d.ts/index.js)
