@@ -20,7 +20,7 @@ const LIBC_MAPPING = {
 };
 
 const rootManifest = JSON.parse(
-  fs.readFileSync(MANIFEST_PATH).toString("utf-8")
+  fs.readFileSync(MANIFEST_PATH).toString("utf-8"),
 );
 
 function package_name(target) {
@@ -79,7 +79,7 @@ function writeManifest() {
   console.log("packageRoot", packageRoot);
 
   const manifestData = JSON.parse(
-    fs.readFileSync(manifestPath).toString("utf-8")
+    fs.readFileSync(manifestPath).toString("utf-8"),
   );
 
   const nativePackages = TARGETS.map((target) => [
@@ -110,7 +110,6 @@ const TARGETS = [
   "linux-arm64-gnu",
   "linux-x64-musl",
   "linux-arm64-musl",
-  "darwin-x64",
   "darwin-arm64",
 ];
 
