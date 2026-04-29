@@ -23,14 +23,14 @@ pub struct AffectedResult {
 #[napi]
 pub fn get_affected(
     test_files: Vec<String>,
-    changed_files: Vec<String>,
+    changes: Vec<String>,
     resolve_options: NapiResolveOptions,
     ignore_type_imports: Option<bool>,
 ) -> AffectedResult {
     let resolver = Resolver::new(normalize_options(resolve_options));
     let affected = collect_affected(
         test_files.iter().map(AsRef::as_ref).collect(),
-        changed_files.iter().map(AsRef::as_ref).collect(),
+        changes.iter().map(AsRef::as_ref).collect(),
         resolver,
         ignore_type_imports.unwrap_or(false),
     );

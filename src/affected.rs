@@ -7,6 +7,10 @@ use std::{
 use oxc_resolver::{ResolveError, Resolver};
 use oxc_span::SourceType;
 
+use crate::changeset::{
+    bare_specifier_segments, matches_changed_package, node_modules_segments, parse_changed_entry,
+    ChangedEntry,
+};
 use crate::imports;
 
 pub struct AffectedReturn {
@@ -35,19 +39,26 @@ fn extend_affected(
 
 pub fn collect_affected(
     test_files: Vec<&str>,
-    changed_files: Vec<&str>,
+    changes: Vec<&str>,
     resolver: Resolver,
     ignore_type_imports: bool,
 ) -> AffectedReturn {
     let current_dir = env::current_dir().unwrap();
     let module_paths: HashSet<&str> =
         HashSet::from_iter(resolver.options().modules.iter().map(|m| m.as_str()));
-    let mut affected = HashSet::from_iter(
-        changed_files
-            .into_iter()
-            .map(|p| current_dir.join(p).to_path_buf())
-            .collect::<Vec<_>>(),
-    );
+
+    let mut affected: HashSet<PathBuf> = HashSet::new();
+    let mut changed_packages: HashSet<String> = HashSet::new();
+    for entry in changes {
+        match parse_changed_entry(entry, &current_dir) {
+            ChangedEntry::File(p) => {
+                affected.insert(p);
+            }
+            ChangedEntry::Package(name) => {
+                changed_packages.insert(name);
+            }
+        }
+    }
     let mut errors: Vec<String> = Vec::new();
 
     let test_files_path_map: HashMap<&str, PathBuf> = HashMap::from_iter(
@@ -89,16 +100,53 @@ pub fn collect_affected(
                     Err(e) => match e {
                         ResolveError::Builtin { .. } => {} // Skip builtins
                         _ => {
-                            let relative_path = absolute_path
-                                .strip_prefix(&current_dir)
-                                .unwrap()
-                                .to_str()
-                                .unwrap_or("unknown file");
-                            errors.push(format!("[{relative_path}]\n{e}"));
+                            // Fallback: if the resolver couldn't find the
+                            // module on disk (e.g. `node_modules` not
+                            // installed), match the raw specifier against
+                            // the npm changeset.
+                            let matched = !changed_packages.is_empty()
+                                && bare_specifier_segments(import_path.as_str())
+                                    .is_some_and(|s| {
+                                        matches_changed_package(&s, &changed_packages)
+                                    });
+                            if matched {
+                                extend_affected(
+                                    &mut affected,
+                                    &absolute_path,
+                                    &dependents_map,
+                                );
+                            } else {
+                                let relative_path = absolute_path
+                                    .strip_prefix(&current_dir)
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap_or("unknown file");
+                                errors.push(format!("[{relative_path}]\n{e}"));
+                            }
                         }
                     },
                     Ok(resolution) => {
                         let import = current_dir.join(resolution.path());
+                        let is_in_node_modules = import.components().any(|c| {
+                            module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
+                        });
+
+                        // First time we see a node_modules path, check if any
+                        // segment-prefix of the package matches a changed entry.
+                        if is_in_node_modules
+                            && !changed_packages.is_empty()
+                            && !affected.contains(&import)
+                            && !dependents_map.contains_key(&import)
+                        {
+                            if let Some(segments) =
+                                node_modules_segments(&import, &module_paths)
+                            {
+                                if matches_changed_package(&segments, &changed_packages) {
+                                    affected.insert(import.clone());
+                                }
+                            }
+                        }
+
                         if affected.contains(&import) {
                             extend_affected(&mut affected, &absolute_path, &dependents_map);
                         } else if dependents_map.contains_key(&import) {
@@ -112,9 +160,7 @@ pub fn collect_affected(
                             );
 
                             // Skip node_modules
-                            if import.components().any(|c| {
-                                module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
-                            }) {
+                            if is_in_node_modules {
                                 continue;
                             }
                             unvisited.push_back(import);
@@ -146,21 +192,21 @@ mod tests {
 
     fn assert_collect_affected(
         test_files: Vec<&str>,
-        changed_files: Vec<&str>,
+        changes: Vec<&str>,
         expected: Vec<&str>,
         resolver: Resolver,
     ) {
-        assert_collect_affected_with(test_files, changed_files, expected, resolver, false);
+        assert_collect_affected_with(test_files, changes, expected, resolver, false);
     }
 
     fn assert_collect_affected_with(
         test_files: Vec<&str>,
-        changed_files: Vec<&str>,
+        changes: Vec<&str>,
         expected: Vec<&str>,
         resolver: Resolver,
         ignore_type_imports: bool,
     ) {
-        let ret = collect_affected(test_files, changed_files, resolver, ignore_type_imports);
+        let ret = collect_affected(test_files, changes, resolver, ignore_type_imports);
         let expected: HashSet<String> = HashSet::from_iter(expected.iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.files.iter().map(|s| s.to_string()));
         let no_errors: Vec<String> = vec![];
@@ -168,19 +214,19 @@ mod tests {
         assert_eq!(ret.errors, no_errors);
     }
 
-    fn assert_affected(test_files: Vec<&str>, changed_files: Vec<&str>) {
+    fn assert_affected(test_files: Vec<&str>, changes: Vec<&str>) {
         assert_collect_affected(
             test_files.clone(),
-            changed_files,
+            changes,
             test_files.clone(),
             Resolver::new(ResolveOptions::default()),
         );
     }
 
-    fn assert_unaffected(test_files: Vec<&str>, changed_files: Vec<&str>) {
+    fn assert_unaffected(test_files: Vec<&str>, changes: Vec<&str>) {
         assert_collect_affected(
             test_files.clone(),
-            changed_files,
+            changes,
             vec![],
             Resolver::new(ResolveOptions::default()),
         );
@@ -222,15 +268,15 @@ mod tests {
             "fixtures/nested/module.spec.js",
             "fixtures/nested/sub-module.spec.js",
         ];
-        let changed_files = ["fixtures/nested/module.js", "fixtures/nested/sub-module.js"];
-        assert_affected(test_files.to_vec(), changed_files.to_vec());
+        let changes = ["fixtures/nested/module.js", "fixtures/nested/sub-module.js"];
+        assert_affected(test_files.to_vec(), changes.to_vec());
         assert_collect_affected(
             test_files.to_vec(),
-            vec![changed_files[0]],
+            vec![changes[0]],
             vec![test_files[0]],
             Resolver::new(ResolveOptions::default()),
         );
-        assert_affected(test_files.to_vec(), vec![changed_files[1]]);
+        assert_affected(test_files.to_vec(), vec![changes[1]]);
         assert_collect_affected(
             test_files.to_vec(),
             vec!["fixtures/nested/another-module.js"],
@@ -265,10 +311,10 @@ mod tests {
     #[test]
     fn test_ts_alias() {
         let test_files = vec!["fixtures/typescript/suite.spec.ts"];
-        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        let changes = vec!["fixtures/typescript/aliased.ts"];
         assert_collect_affected(
             test_files.clone(),
-            changed_files,
+            changes,
             test_files,
             Resolver::new(ResolveOptions {
                 extensions: vec![".ts".into()],
@@ -286,10 +332,10 @@ mod tests {
     #[test]
     fn test_type_import() {
         let test_files = vec!["fixtures/typescript/type-import.ts"];
-        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        let changes = vec!["fixtures/typescript/aliased.ts"];
         assert_collect_affected(
             test_files.clone(),
-            changed_files,
+            changes,
             test_files,
             ts_resolver(),
         );
@@ -300,10 +346,10 @@ mod tests {
         // With `ignore_type_imports = true` a file that only depends on `aliased.ts`
         // through `import type` must no longer be considered affected.
         let test_files = vec!["fixtures/typescript/type-import.ts"];
-        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        let changes = vec!["fixtures/typescript/aliased.ts"];
         assert_collect_affected_with(
             test_files,
-            changed_files,
+            changes,
             vec![],
             ts_resolver(),
             true,
@@ -315,10 +361,10 @@ mod tests {
         // Files with a real value import of the changed file remain affected
         // even when `ignore_type_imports = true`.
         let test_files = vec!["fixtures/typescript/suite.spec.ts"];
-        let changed_files = vec!["fixtures/typescript/aliased.ts"];
+        let changes = vec!["fixtures/typescript/aliased.ts"];
         assert_collect_affected_with(
             test_files.clone(),
-            changed_files,
+            changes,
             test_files,
             ts_resolver(),
             true,
@@ -367,5 +413,236 @@ mod tests {
     #[test]
     fn test_bad_module() {
         assert_unaffected(vec!["fixtures/modules/index.mjs"], vec![]);
+    }
+
+    // ---- npm changeset entries --------------------------------------------
+
+    #[test]
+    fn test_npm_package_affected() {
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec!["npm:lodash"],
+            vec!["fixtures/npm/uses-lodash.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_unrelated_package_not_affected() {
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec!["npm:not-lodash"],
+            vec![],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_deep_import_matches_package() {
+        // `import 'lodash/fp'` — npm:lodash should still match.
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash-fp.js"],
+            vec!["npm:lodash"],
+            vec!["fixtures/npm/uses-lodash-fp.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_scoped_package_affected() {
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-scope-foo.js"],
+            vec!["npm:@scope/foo"],
+            vec!["fixtures/npm/uses-scope-foo.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_scope_alone_matches_all_scope_members() {
+        // `npm:@scope` is just a package entry; segment-prefix matching makes
+        // it catch every `@scope/...` import.
+        assert_collect_affected(
+            vec![
+                "fixtures/npm/uses-scope-foo.js",
+                "fixtures/npm/uses-scope-bar.js",
+            ],
+            vec!["npm:@scope"],
+            vec![
+                "fixtures/npm/uses-scope-foo.js",
+                "fixtures/npm/uses-scope-bar.js",
+            ],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_scope_does_not_match_other_scope() {
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-other-foo.js"],
+            vec!["npm:@scope"],
+            vec![],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_scope_does_not_match_unscoped() {
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec!["npm:@scope"],
+            vec![],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_via_intermediate_user_file() {
+        // consumer.spec.js → intermediate.js → 'lodash'
+        // npm:lodash should propagate up through the intermediate file.
+        assert_collect_affected(
+            vec!["fixtures/npm/consumer.spec.js"],
+            vec!["npm:lodash"],
+            vec!["fixtures/npm/consumer.spec.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid changeset entry")]
+    fn test_npm_empty_entry_panics() {
+        collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec!["npm:"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid changeset entry")]
+    fn test_empty_file_entry_panics() {
+        collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec![""],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+    }
+
+    #[test]
+    fn test_npm_subpath_entry_matches_subpath() {
+        // npm:lodash/fp matches imports of lodash/fp.
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash-fp.js"],
+            vec!["npm:lodash/fp"],
+            vec!["fixtures/npm/uses-lodash-fp.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_npm_subpath_entry_does_not_match_root() {
+        // npm:lodash/fp does NOT match a plain `import 'lodash'`.
+        assert_collect_affected(
+            vec!["fixtures/npm/uses-lodash.js"],
+            vec!["npm:lodash/fp"],
+            vec![],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_file_prefix_equivalent_to_no_prefix() {
+        assert_collect_affected(
+            vec!["fixtures/nested/module.spec.js"],
+            vec!["file:fixtures/nested/module.js"],
+            vec!["fixtures/nested/module.spec.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    // ---- Fallback when node_modules isn't installed -----------------------
+
+    #[test]
+    fn test_unresolved_pkg_matches_changeset() {
+        // The package isn't installed on disk; the resolver fails. Because
+        // the specifier is a bare module specifier and `npm:not-installed-pkg`
+        // is in the changeset, the file is still considered affected and no
+        // error is emitted.
+        let ret = collect_affected(
+            vec!["fixtures/unresolved-pkg/uses-not-installed.js"],
+            vec!["npm:not-installed-pkg"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+        assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
+        assert_eq!(
+            ret.files,
+            vec!["fixtures/unresolved-pkg/uses-not-installed.js".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_unresolved_pkg_no_changeset_match_still_errors() {
+        // If the unresolved specifier doesn't match any changed package, the
+        // resolve error surfaces as before.
+        let ret = collect_affected(
+            vec!["fixtures/unresolved-pkg/uses-not-installed.js"],
+            vec!["npm:something-else"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+        assert_eq!(ret.errors.len(), 1);
+        assert!(ret.errors[0].contains("not-installed-pkg"));
+        assert!(ret.files.is_empty());
+    }
+
+    #[test]
+    fn test_unresolved_pkg_deep_import_matches_root_package() {
+        // `import 'not-installed-pkg/sub/path'` with `npm:not-installed-pkg`.
+        let ret = collect_affected(
+            vec!["fixtures/unresolved-pkg/uses-not-installed-deep.js"],
+            vec!["npm:not-installed-pkg"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+        assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
+        assert_eq!(
+            ret.files,
+            vec!["fixtures/unresolved-pkg/uses-not-installed-deep.js".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_unresolved_scoped_pkg_matches_scope() {
+        // npm:@unresolved as a changeset entry catches all `@unresolved/*`.
+        let ret = collect_affected(
+            vec!["fixtures/unresolved-pkg/uses-scoped-missing.js"],
+            vec!["npm:@unresolved"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+        );
+        assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
+        assert_eq!(
+            ret.files,
+            vec!["fixtures/unresolved-pkg/uses-scoped-missing.js".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_mixed_changeset_file_and_npm() {
+        assert_collect_affected(
+            vec![
+                "fixtures/nested/module.spec.js",
+                "fixtures/npm/uses-lodash.js",
+            ],
+            vec!["fixtures/nested/module.js", "npm:lodash"],
+            vec![
+                "fixtures/nested/module.spec.js",
+                "fixtures/npm/uses-lodash.js",
+            ],
+            Resolver::new(ResolveOptions::default()),
+        );
     }
 }

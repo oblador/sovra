@@ -13,13 +13,13 @@ const testFiles = [
   join(fixturesPath, "module.spec.js"),
   join(fixturesPath, "sub-module.spec.js"),
 ];
-const changedFiles = [join(fixturesPath, "another-module.js")];
+const changes = [join(fixturesPath, "another-module.js")];
 /** @type {import('..').NapiResolveOptions} */
 const resolverOptions = {
   extensions: [".js", ".jsx", ".ts", ".tsx"],
 };
 
-const affected = getAffected(testFiles, changedFiles, resolverOptions);
+const affected = getAffected(testFiles, changes, resolverOptions);
 
 assert.deepEqual(affected.errors, []);
 assert.deepEqual(affected.files.sort(), testFiles.sort());
@@ -37,11 +37,11 @@ const tsResolverOptions = {
   },
 };
 const typeImportTestFiles = [join(tsFixturesPath, "type-import.ts")];
-const typeImportChangedFiles = [join(tsFixturesPath, "aliased.ts")];
+const typeImportChanges = [join(tsFixturesPath, "aliased.ts")];
 
 const typeImportAffected = getAffected(
   typeImportTestFiles,
-  typeImportChangedFiles,
+  typeImportChanges,
   tsResolverOptions
 );
 assert.deepEqual(typeImportAffected.errors, []);
@@ -49,7 +49,7 @@ assert.deepEqual(typeImportAffected.files, typeImportTestFiles);
 
 const typeImportIgnored = getAffected(
   typeImportTestFiles,
-  typeImportChangedFiles,
+  typeImportChanges,
   tsResolverOptions,
   true
 );
