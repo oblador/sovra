@@ -143,6 +143,28 @@ impl<'a> Visit<'a> for CollectImports {
         walk::walk_export_all_declaration(self, it);
     }
 
+    fn visit_ts_import_type(&mut self, it: &oxc_ast::ast::TSImportType<'a>) {
+        if self.ignore_type_imports {
+            return;
+        }
+        self.import_paths.insert(it.source.value.to_string());
+        walk::walk_ts_import_type(self, it);
+    }
+
+    fn visit_ts_import_equals_declaration(
+        &mut self,
+        it: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
+    ) {
+        if self.ignore_type_imports && it.import_kind.is_type() {
+            return;
+        }
+        if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(ext) = &it.module_reference
+        {
+            self.import_paths.insert(ext.expression.value.to_string());
+        }
+        walk::walk_ts_import_equals_declaration(self, it);
+    }
+
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
         if it.is_require_call() {
             match it.common_js_require() {
@@ -411,5 +433,54 @@ mod tests {
     #[test]
     fn test_ignore_type_import_drops_type_export_all() {
         assert_ts_imports("export type * from 'hest';", vec![], true);
+    }
+
+    #[test]
+    fn test_typeof_import_collected_by_default() {
+        assert_ts_imports(
+            "type Snel = typeof import('hest');",
+            vec!["hest"],
+            false,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_typeof_import() {
+        assert_ts_imports("type Snel = typeof import('hest');", vec![], true);
+    }
+
+    #[test]
+    fn test_ts_import_type_collected_by_default() {
+        assert_ts_imports(
+            "type Snel = import('hest').Rein;",
+            vec!["hest"],
+            false,
+        );
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_ts_import_type() {
+        assert_ts_imports("type Snel = import('hest').Rein;", vec![], true);
+    }
+
+    #[test]
+    fn test_import_equals_require() {
+        assert_ts_imports("import snel = require('hest');", vec!["hest"], false);
+    }
+
+    #[test]
+    fn test_ignore_type_import_keeps_value_import_equals() {
+        assert_ts_imports("import snel = require('hest');", vec!["hest"], true);
+    }
+
+    #[test]
+    fn test_ignore_type_import_drops_type_import_equals() {
+        assert_ts_imports("import type snel = require('hest');", vec![], true);
+    }
+
+    #[test]
+    fn test_import_equals_identifier_reference_not_collected() {
+        // `import x = Foo.Bar` is a namespace alias, not a module import.
+        assert_ts_imports("namespace Foo { export const bar = 1; } import snel = Foo.bar;", vec![], false);
     }
 }
