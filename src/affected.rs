@@ -1,11 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use oxc_resolver::{ResolveError, Resolver};
 use oxc_span::SourceType;
+use rayon::prelude::*;
 
 use crate::changeset::{
     bare_specifier_segments, matches_changed_package, node_modules_segments, parse_changed_entry,
@@ -34,6 +35,110 @@ fn extend_affected(
                 extend_affected(affected, dependent, dependents_map);
             }
         }
+    }
+}
+
+enum ScanEdge {
+    /// Resolved to a regular file; `is_in_node_modules` is precomputed to
+    /// avoid touching `module_paths` again during the (sequential) merge.
+    Resolved {
+        import: PathBuf,
+        is_in_node_modules: bool,
+    },
+    /// Resolve failed but the bare specifier matched a changed npm
+    /// package — the importing file should be marked affected.
+    NpmFallbackMatched,
+    /// Resolve failed and didn't match any changeset entry; surface it.
+    UnresolvedError(String),
+}
+
+struct FileScan {
+    absolute_path: PathBuf,
+    parser_errors: Vec<String>,
+    edges: Vec<ScanEdge>,
+}
+
+fn scan_file(
+    absolute_path: PathBuf,
+    resolver: &Resolver,
+    current_dir: &Path,
+    module_paths: &HashSet<&str>,
+    changed_packages: &HashSet<String>,
+    ignore_type_imports: bool,
+) -> FileScan {
+    let mut parser_errors = Vec::new();
+    let mut edges = Vec::new();
+
+    let Ok(source_type) = SourceType::from_path(absolute_path.clone()) else {
+        return FileScan {
+            absolute_path,
+            parser_errors,
+            edges,
+        };
+    };
+    let Ok(source_text) = fs::read_to_string(&absolute_path) else {
+        parser_errors.push(format!("Cannot read file: {absolute_path:?}"));
+        return FileScan {
+            absolute_path,
+            parser_errors,
+            edges,
+        };
+    };
+
+    let result = imports::collect_imports(
+        source_type,
+        source_text.as_str(),
+        Some(&absolute_path),
+        ignore_type_imports,
+    );
+    parser_errors.extend(result.errors);
+
+    let Some(parent_path) = absolute_path.parent() else {
+        return FileScan {
+            absolute_path,
+            parser_errors,
+            edges,
+        };
+    };
+
+    edges.reserve(result.imports_paths.len());
+    for import_path in result.imports_paths.iter() {
+        match resolver.resolve(parent_path, import_path.as_str()) {
+            Err(ResolveError::Builtin { .. }) => {} // Skip builtins
+            Err(e) => {
+                // Fallback: if the resolver couldn't find the module on
+                // disk (e.g. `node_modules` not installed), match the raw
+                // specifier against the npm changeset.
+                let matched = !changed_packages.is_empty()
+                    && bare_specifier_segments(import_path.as_str())
+                        .is_some_and(|s| matches_changed_package(&s, changed_packages));
+                if matched {
+                    edges.push(ScanEdge::NpmFallbackMatched);
+                } else {
+                    let relative_path = absolute_path
+                        .strip_prefix(current_dir)
+                        .unwrap_or(&absolute_path)
+                        .to_str()
+                        .unwrap_or("unknown file");
+                    edges.push(ScanEdge::UnresolvedError(format!("[{relative_path}]\n{e}")));
+                }
+            }
+            Ok(resolution) => {
+                let import = current_dir.join(resolution.path());
+                let is_in_node_modules = import
+                    .components()
+                    .any(|c| module_paths.contains(c.to_owned().as_os_str().to_str().unwrap()));
+                edges.push(ScanEdge::Resolved {
+                    import,
+                    is_in_node_modules,
+                });
+            }
+        }
+    }
+    FileScan {
+        absolute_path,
+        parser_errors,
+        edges,
     }
 }
 
@@ -67,80 +172,60 @@ pub fn collect_affected(
             .map(|p: &&str| (*p, current_dir.join(p).to_path_buf()))
             .collect::<Vec<_>>(),
     );
-    let mut unvisited = test_files_path_map
+    let mut frontier: Vec<PathBuf> = test_files_path_map
         .values()
         .cloned()
         .filter(|p| !affected.contains(p))
-        .collect::<VecDeque<_>>();
+        .collect();
     let mut dependents_map: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
 
-    while let Some(absolute_path) = unvisited.pop_front() {
-        if affected.contains(&absolute_path) {
-            extend_affected(&mut affected, &absolute_path, &dependents_map);
-            continue;
+    while !frontier.is_empty() {
+        let mut to_scan: Vec<PathBuf> = Vec::with_capacity(frontier.len());
+        for path in frontier.drain(..) {
+            if affected.contains(&path) {
+                extend_affected(&mut affected, &path, &dependents_map);
+                continue;
+            }
+            to_scan.push(path);
         }
 
-        let Ok(source_type) = SourceType::from_path(absolute_path.clone()) else {
-            continue;
-        };
-        let Ok(source_text) = fs::read_to_string(&absolute_path) else {
-            errors.push(format!("Cannot read file: {absolute_path:?}",));
-            continue;
-        };
-        let result = imports::collect_imports(
-            source_type,
-            source_text.as_str(),
-            Some(&absolute_path),
-            ignore_type_imports,
-        );
-        errors.extend(result.errors);
-        if let Some(parent_path) = absolute_path.parent() {
-            for import_path in result.imports_paths.iter() {
-                match resolver.resolve(parent_path, import_path.as_str()) {
-                    Err(e) => match e {
-                        ResolveError::Builtin { .. } => {} // Skip builtins
-                        _ => {
-                            // Fallback: if the resolver couldn't find the
-                            // module on disk (e.g. `node_modules` not
-                            // installed), match the raw specifier against
-                            // the npm changeset.
-                            let matched = !changed_packages.is_empty()
-                                && bare_specifier_segments(import_path.as_str())
-                                    .is_some_and(|s| {
-                                        matches_changed_package(&s, &changed_packages)
-                                    });
-                            if matched {
-                                extend_affected(
-                                    &mut affected,
-                                    &absolute_path,
-                                    &dependents_map,
-                                );
-                            } else {
-                                let relative_path = absolute_path
-                                    .strip_prefix(&current_dir)
-                                    .unwrap()
-                                    .to_str()
-                                    .unwrap_or("unknown file");
-                                errors.push(format!("[{relative_path}]\n{e}"));
-                            }
-                        }
-                    },
-                    Ok(resolution) => {
-                        let import = current_dir.join(resolution.path());
-                        let is_in_node_modules = import.components().any(|c| {
-                            module_paths.contains(c.to_owned().as_os_str().to_str().unwrap())
-                        });
+        let scans: Vec<FileScan> = to_scan
+            .into_par_iter()
+            .map(|path| {
+                scan_file(
+                    path,
+                    &resolver,
+                    &current_dir,
+                    &module_paths,
+                    &changed_packages,
+                    ignore_type_imports,
+                )
+            })
+            .collect();
 
-                        // First time we see a node_modules path, check if any
-                        // segment-prefix of the package matches a changed entry.
+        let mut next_frontier: Vec<PathBuf> = Vec::new();
+        for scan in scans {
+            errors.extend(scan.parser_errors);
+            let absolute_path = scan.absolute_path;
+            for edge in scan.edges {
+                match edge {
+                    ScanEdge::UnresolvedError(e) => errors.push(e),
+                    ScanEdge::NpmFallbackMatched => {
+                        extend_affected(&mut affected, &absolute_path, &dependents_map);
+                    }
+                    ScanEdge::Resolved {
+                        import,
+                        is_in_node_modules,
+                    } => {
+                        // First time we see a node_modules path, check if
+                        // any segment-prefix of the package matches a
+                        // changed entry.
                         if is_in_node_modules
                             && !changed_packages.is_empty()
                             && !affected.contains(&import)
                             && !dependents_map.contains_key(&import)
                         {
-                            if let Some(segments) =
-                                node_modules_segments(&import, &module_paths)
-                            {
+                            if let Some(segments) = node_modules_segments(&import, &module_paths) {
                                 if matches_changed_package(&segments, &changed_packages) {
                                     affected.insert(import.clone());
                                 }
@@ -163,23 +248,24 @@ pub fn collect_affected(
                             if is_in_node_modules {
                                 continue;
                             }
-                            unvisited.push_back(import);
+                            next_frontier.push(import);
                         }
                     }
                 }
             }
         }
+
+        frontier = next_frontier;
     }
 
-    let ret: AffectedReturn = AffectedReturn {
+    AffectedReturn {
         errors,
         files: test_files_path_map
             .iter()
             .filter(|(_f, p)| affected.contains(*p))
             .map(|(f, _)| f.to_string())
             .collect(),
-    };
-    ret
+    }
 }
 
 #[cfg(test)]
@@ -333,12 +419,7 @@ mod tests {
     fn test_type_import() {
         let test_files = vec!["fixtures/typescript/type-import.ts"];
         let changes = vec!["fixtures/typescript/aliased.ts"];
-        assert_collect_affected(
-            test_files.clone(),
-            changes,
-            test_files,
-            ts_resolver(),
-        );
+        assert_collect_affected(test_files.clone(), changes, test_files, ts_resolver());
     }
 
     #[test]
@@ -347,13 +428,7 @@ mod tests {
         // through `import type` must no longer be considered affected.
         let test_files = vec!["fixtures/typescript/type-import.ts"];
         let changes = vec!["fixtures/typescript/aliased.ts"];
-        assert_collect_affected_with(
-            test_files,
-            changes,
-            vec![],
-            ts_resolver(),
-            true,
-        );
+        assert_collect_affected_with(test_files, changes, vec![], ts_resolver(), true);
     }
 
     #[test]
@@ -362,13 +437,7 @@ mod tests {
         // even when `ignore_type_imports = true`.
         let test_files = vec!["fixtures/typescript/suite.spec.ts"];
         let changes = vec!["fixtures/typescript/aliased.ts"];
-        assert_collect_affected_with(
-            test_files.clone(),
-            changes,
-            test_files,
-            ts_resolver(),
-            true,
-        );
+        assert_collect_affected_with(test_files.clone(), changes, test_files, ts_resolver(), true);
     }
 
     #[test]

@@ -27,10 +27,7 @@ pub fn parse_changed_entry(entry: &str, current_dir: &Path) -> ChangedEntry {
 
 /// Returns the path segments after the last `node_modules` (or other module
 /// folder) in `path`, or `None` if the path is not inside one.
-pub fn node_modules_segments(
-    path: &Path,
-    module_paths: &HashSet<&str>,
-) -> Option<Vec<String>> {
+pub fn node_modules_segments(path: &Path, module_paths: &HashSet<&str>) -> Option<Vec<String>> {
     let segments: Vec<&str> = path
         .components()
         .filter_map(|c| c.as_os_str().to_str())
@@ -224,9 +221,7 @@ mod tests {
 
     #[test]
     fn segments_pnpm_style() {
-        let p = PathBuf::from(
-            "/proj/node_modules/.pnpm/lodash@4.0.0/node_modules/lodash/index.js",
-        );
+        let p = PathBuf::from("/proj/node_modules/.pnpm/lodash@4.0.0/node_modules/lodash/index.js");
         assert_eq!(
             node_modules_segments(&p, &mods()),
             Some(segs(&["lodash", "index.js"])),
@@ -322,10 +317,7 @@ mod tests {
 
     #[test]
     fn bare_unscoped() {
-        assert_eq!(
-            bare_specifier_segments("lodash"),
-            Some(segs(&["lodash"])),
-        );
+        assert_eq!(bare_specifier_segments("lodash"), Some(segs(&["lodash"])),);
     }
 
     #[test]

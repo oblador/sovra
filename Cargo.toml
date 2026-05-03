@@ -28,6 +28,7 @@ oxc_ast_visit = "0.128.0"
 oxc_parser    = "0.128.0"
 oxc_resolver  = "11.19.1"
 oxc_span      = "0.128.0"
+rayon         = "1"
 
 # For napi
 [profile.release]

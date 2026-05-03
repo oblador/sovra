@@ -47,7 +47,8 @@ fn normalize_options(op: NapiResolveOptions) -> ResolveOptions {
         cwd: default.cwd,
         module_type: default.module_type,
         node_path: default.node_path,
-        allow_package_exports_in_directory_resolve: default.allow_package_exports_in_directory_resolve,
+        allow_package_exports_in_directory_resolve: default
+            .allow_package_exports_in_directory_resolve,
         tsconfig: op.tsconfig.map(|tsconfig| tsconfig.into()),
         alias: op
             .alias

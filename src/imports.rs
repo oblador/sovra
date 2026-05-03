@@ -352,11 +352,7 @@ mod tests {
 
     #[test]
     fn test_ignore_type_import_default_keeps_type_imports() {
-        assert_ts_imports(
-            "import type { Snel } from 'hest';",
-            vec!["hest"],
-            false,
-        );
+        assert_ts_imports("import type { Snel } from 'hest';", vec!["hest"], false);
     }
 
     #[test]
@@ -397,11 +393,7 @@ mod tests {
 
     #[test]
     fn test_ignore_type_import_drops_all_specifier_type_modifiers() {
-        assert_ts_imports(
-            "import { type Snel, type Rein } from 'hest';",
-            vec![],
-            true,
-        );
+        assert_ts_imports("import { type Snel, type Rein } from 'hest';", vec![], true);
     }
 
     #[test]
@@ -437,11 +429,7 @@ mod tests {
 
     #[test]
     fn test_typeof_import_collected_by_default() {
-        assert_ts_imports(
-            "type Snel = typeof import('hest');",
-            vec!["hest"],
-            false,
-        );
+        assert_ts_imports("type Snel = typeof import('hest');", vec!["hest"], false);
     }
 
     #[test]
@@ -451,11 +439,7 @@ mod tests {
 
     #[test]
     fn test_ts_import_type_collected_by_default() {
-        assert_ts_imports(
-            "type Snel = import('hest').Rein;",
-            vec!["hest"],
-            false,
-        );
+        assert_ts_imports("type Snel = import('hest').Rein;", vec!["hest"], false);
     }
 
     #[test]
@@ -481,6 +465,10 @@ mod tests {
     #[test]
     fn test_import_equals_identifier_reference_not_collected() {
         // `import x = Foo.Bar` is a namespace alias, not a module import.
-        assert_ts_imports("namespace Foo { export const bar = 1; } import snel = Foo.bar;", vec![], false);
+        assert_ts_imports(
+            "namespace Foo { export const bar = 1; } import snel = Foo.bar;",
+            vec![],
+            false,
+        );
     }
 }
