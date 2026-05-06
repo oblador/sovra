@@ -25,7 +25,7 @@ yarn add sovra
 
 ## Usage
 
-### `getAffected(testFiles: string[], changes: string[], resolverOptions: OxcResolverOptions, ignoreTypeImports?: boolean)`
+### `getAffected(testFiles: string[], changes: string[], resolverOptions: OxcResolverOptions, ignoreTypeImports?: boolean, requireAliases?: string[])`
 
 Returns a subset of `testFiles` that have `changes` in their import graph. This is useful in order to determine which tests to run in a large repo.
 
@@ -37,6 +37,7 @@ Returns a subset of `testFiles` that have `changes` in their import graph. This 
 | `changes`            | List of change entries. Each entry is either a file path (optionally `file:`-prefixed) or an npm package with the `npm:` prefix — see [Change entry formats](#change-entry-formats) below.                                 |
 | `resolverOptions`    | Configuration on how to resolve imports, see [oxc-resolver](https://github.com/oxc-project/oxc-resolver?tab=readme-ov-file#options)                                                                                        |
 | `ignoreTypeImports`  | When `true`, type-only imports `import type` are excluded from the import graph so changes to files that are only referenced for their types do not affect tests. Defaults to `false`.            |
+| `requireAliases`     | List of function calls to treat like `require()` — e.g. `["jest.requireActual", "vi.importActual"]`. Each entry is `"name"` (bare call) or `"object.method"` (member call). Their first string-literal argument is collected as an import path. |
 
 #### Change entry formats
 

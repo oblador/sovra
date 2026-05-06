@@ -5,7 +5,7 @@ export interface AffectedResult {
   errors: Array<string>
 }
 
-export declare function getAffected(testFiles: Array<string>, changes: Array<string>, resolveOptions: NapiResolveOptions, ignoreTypeImports?: boolean | undefined | null): AffectedResult
+export declare function getAffected(testFiles: Array<string>, changes: Array<string>, resolveOptions: NapiResolveOptions, ignoreTypeImports?: boolean | undefined | null, requireAliases?: Array<string> | undefined | null): AffectedResult
 
 /**
  * Module Resolution Options

@@ -26,13 +26,16 @@ pub fn get_affected(
     changes: Vec<String>,
     resolve_options: NapiResolveOptions,
     ignore_type_imports: Option<bool>,
+    require_aliases: Option<Vec<String>>,
 ) -> AffectedResult {
     let resolver = Resolver::new(normalize_options(resolve_options));
+    let require_aliases = require_aliases.unwrap_or_default();
     let affected = collect_affected(
         test_files.iter().map(AsRef::as_ref).collect(),
         changes.iter().map(AsRef::as_ref).collect(),
         resolver,
         ignore_type_imports.unwrap_or(false),
+        require_aliases.iter().map(AsRef::as_ref).collect(),
     );
     AffectedResult {
         files: affected.files,

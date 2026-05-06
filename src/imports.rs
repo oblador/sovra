@@ -10,11 +10,45 @@ pub struct ImportsReturn {
     pub imports_paths: Vec<String>,
 }
 
+/// A function call that should be collected as if it were a `require()` —
+/// e.g. `jest.requireActual('foo')` or `vi.importActual('foo')`. Built from a
+/// dotted string via [`RequireAlias::parse`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequireAlias {
+    pub object: Option<String>,
+    pub method: String,
+}
+
+impl RequireAlias {
+    pub fn parse(s: &str) -> Self {
+        assert!(!s.is_empty(), "Require alias must not be empty");
+        let parts: Vec<&str> = s.split('.').collect();
+        match parts.as_slice() {
+            [method] => RequireAlias {
+                object: None,
+                method: (*method).to_string(),
+            },
+            [obj, method] => {
+                assert!(
+                    !obj.is_empty() && !method.is_empty(),
+                    "Require alias '{s}' has empty segments",
+                );
+                RequireAlias {
+                    object: Some((*obj).to_string()),
+                    method: (*method).to_string(),
+                }
+            }
+            _ => panic!("Require alias '{s}' must be 'name' or 'object.method'"),
+        }
+    }
+}
+
 pub fn collect_imports(
     source_type: SourceType,
     source_text: &str,
     source_filename: Option<&PathBuf>,
     ignore_type_imports: bool,
+    require_aliases: &[RequireAlias],
 ) -> ImportsReturn {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &source_text, source_type).parse();
@@ -22,8 +56,10 @@ pub fn collect_imports(
     let program = parsed.program;
 
     let mut ast_pass = CollectImports {
+        errors: Vec::new(),
+        import_paths: HashSet::new(),
         ignore_type_imports,
-        ..CollectImports::default()
+        require_aliases,
     };
     ast_pass.visit_program(&program);
 
@@ -82,14 +118,64 @@ fn is_type_only_named_export(it: &oxc_ast::ast::ExportNamedDeclaration<'_>) -> b
     it.specifiers.iter().all(|spec| spec.export_kind.is_type())
 }
 
-#[derive(Debug, Default)]
-struct CollectImports {
+struct CollectImports<'b> {
     errors: Vec<OxcDiagnostic>,
     import_paths: HashSet<String>,
     ignore_type_imports: bool,
+    require_aliases: &'b [RequireAlias],
 }
 
-impl<'a> Visit<'a> for CollectImports {
+enum RequireCallMatch<'a> {
+    /// Not a require-like call — visitor should leave it alone.
+    None,
+    /// Require-like call with a valid string-literal argument.
+    Path(&'a oxc_ast::ast::StringLiteral<'a>),
+    /// Require-like call but the argument shape is wrong.
+    InvalidArgs,
+}
+
+/// Identifies calls that should be collected as imports: the built-in
+/// `require(...)` plus any caller-configured aliases like
+/// `jest.requireActual(...)` or `vi.importActual(...)`.
+fn match_require_call<'a>(
+    call: &'a oxc_ast::ast::CallExpression<'a>,
+    aliases: &[RequireAlias],
+) -> RequireCallMatch<'a> {
+    let matched = match &call.callee {
+        oxc_ast::ast::Expression::Identifier(id) => {
+            id.name == "require"
+                || aliases
+                    .iter()
+                    .any(|a| a.object.is_none() && a.method == id.name.as_str())
+        }
+        expr => match expr.as_member_expression() {
+            Some(member) => {
+                let oxc_ast::ast::Expression::Identifier(obj_id) = member.object() else {
+                    return RequireCallMatch::None;
+                };
+                let Some(prop_name) = member.static_property_name() else {
+                    return RequireCallMatch::None;
+                };
+                aliases.iter().any(|a| {
+                    a.object.as_deref() == Some(obj_id.name.as_str()) && a.method == prop_name
+                })
+            }
+            None => false,
+        },
+    };
+    if !matched {
+        return RequireCallMatch::None;
+    }
+    if call.arguments.len() != 1 {
+        return RequireCallMatch::InvalidArgs;
+    }
+    match call.arguments.first() {
+        Some(oxc_ast::ast::Argument::StringLiteral(lit)) => RequireCallMatch::Path(lit),
+        _ => RequireCallMatch::InvalidArgs,
+    }
+}
+
+impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
         if self.ignore_type_imports && is_type_only_import(it) {
             return;
@@ -166,23 +252,17 @@ impl<'a> Visit<'a> for CollectImports {
     }
 
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
-        if it.is_require_call() {
-            match it.common_js_require() {
-                Some(literal) => {
-                    self.import_paths.insert(literal.value.to_string());
-                }
-                None => {
-                    self.errors.push(
-                        OxcDiagnostic::error("Require call must have a string literal argument")
-                            .with_label(it.span),
-                    );
-                }
+        match match_require_call(it, &self.require_aliases) {
+            RequireCallMatch::None => {}
+            RequireCallMatch::Path(literal) => {
+                self.import_paths.insert(literal.value.to_string());
             }
-        } else if it.callee_name().is_some_and(|n| n == "require") {
-            self.errors.push(
-                OxcDiagnostic::error("Require call must have a string literal argument")
-                    .with_label(it.span),
-            );
+            RequireCallMatch::InvalidArgs => {
+                self.errors.push(
+                    OxcDiagnostic::error("Require call must have a single string literal argument")
+                        .with_label(it.span),
+                );
+            }
         }
         walk::walk_call_expression(self, it);
     }
@@ -193,8 +273,22 @@ mod tests {
     use super::*;
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
-        let ret = collect_imports(SourceType::mjs(), source_text, None, false);
+        let ret = collect_imports(SourceType::mjs(), source_text, None, false, &[]);
         // Convert to HashSet to ignore order
+        let expected: HashSet<String> =
+            HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
+        let actual: HashSet<String> = HashSet::from_iter(ret.imports_paths.into_iter());
+        assert_eq!(expected, actual);
+        assert!(ret.errors.is_empty());
+    }
+
+    fn assert_imports_with_aliases(
+        source_text: &str,
+        aliases: Vec<&str>,
+        expected_imports: Vec<&str>,
+    ) {
+        let parsed: Vec<RequireAlias> = aliases.iter().map(|s| RequireAlias::parse(s)).collect();
+        let ret = collect_imports(SourceType::mjs(), source_text, None, false, &parsed);
         let expected: HashSet<String> =
             HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.imports_paths.into_iter());
@@ -207,7 +301,13 @@ mod tests {
         expected_imports: Vec<&str>,
         ignore_type_imports: bool,
     ) {
-        let ret = collect_imports(SourceType::ts(), source_text, None, ignore_type_imports);
+        let ret = collect_imports(
+            SourceType::ts(),
+            source_text,
+            None,
+            ignore_type_imports,
+            &[],
+        );
         let expected: HashSet<String> =
             HashSet::from_iter(expected_imports.into_iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.imports_paths.into_iter());
@@ -216,7 +316,7 @@ mod tests {
     }
 
     fn asset_error(source_text: &str) {
-        let ret = collect_imports(SourceType::mjs(), source_text, None, false);
+        let ret = collect_imports(SourceType::mjs(), source_text, None, false, &[]);
         assert!(!ret.errors.is_empty());
         assert!(ret.imports_paths.is_empty());
     }
@@ -286,6 +386,7 @@ mod tests {
             "require('snel'); require();",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -298,6 +399,7 @@ mod tests {
             "require('snel'); const path = 'hest'; require(path);",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -310,6 +412,7 @@ mod tests {
             "import 'snel'; const path = 'hest'; import(path);",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -322,6 +425,7 @@ mod tests {
             "import 'snel'; const path = 'hest'; import(`${path}`);",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -334,6 +438,7 @@ mod tests {
             "const path = 'hest'; require(`${path}`);",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
     }
@@ -345,6 +450,7 @@ mod tests {
             "import 'snel'; import('he' + 'st');",
             None,
             false,
+            &[],
         );
         assert!(!ret.errors.is_empty());
         assert_eq!(ret.imports_paths, vec!["snel"]);
@@ -470,5 +576,170 @@ mod tests {
             vec![],
             false,
         );
+    }
+
+    // ---- RequireAlias::parse ---------------------------------------------
+
+    #[test]
+    fn test_alias_parse_bare() {
+        assert_eq!(
+            RequireAlias::parse("requireActual"),
+            RequireAlias {
+                object: None,
+                method: "requireActual".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_alias_parse_member() {
+        assert_eq!(
+            RequireAlias::parse("jest.requireActual"),
+            RequireAlias {
+                object: Some("jest".to_string()),
+                method: "requireActual".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be empty")]
+    fn test_alias_parse_empty_panics() {
+        RequireAlias::parse("");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segments")]
+    fn test_alias_parse_leading_dot_panics() {
+        RequireAlias::parse(".foo");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segments")]
+    fn test_alias_parse_trailing_dot_panics() {
+        RequireAlias::parse("foo.");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be 'name' or 'object.method'")]
+    fn test_alias_parse_too_many_segments_panics() {
+        RequireAlias::parse("foo.bar.baz");
+    }
+
+    // ---- visitor: require-alias matching ----------------------------------
+
+    #[test]
+    fn test_alias_member_call_collected() {
+        assert_imports_with_aliases(
+            "jest.requireActual('hest');",
+            vec!["jest.requireActual"],
+            vec!["hest"],
+        );
+    }
+
+    #[test]
+    fn test_alias_vi_import_actual() {
+        assert_imports_with_aliases(
+            "vi.importActual('hest');",
+            vec!["vi.importActual"],
+            vec!["hest"],
+        );
+    }
+
+    #[test]
+    fn test_alias_bare_identifier_call_collected() {
+        assert_imports_with_aliases(
+            "requireActual('hest');",
+            vec!["requireActual"],
+            vec!["hest"],
+        );
+    }
+
+    #[test]
+    fn test_alias_not_collected_when_unconfigured() {
+        // No aliases supplied → these are arbitrary calls and ignored.
+        assert_imports_with_aliases("jest.requireActual('hest');", vec![], vec![]);
+    }
+
+    #[test]
+    fn test_alias_member_does_not_match_different_object() {
+        assert_imports_with_aliases(
+            "other.requireActual('hest');",
+            vec!["jest.requireActual"],
+            vec![],
+        );
+    }
+
+    #[test]
+    fn test_alias_member_does_not_match_bare_call() {
+        // `jest.requireActual` configured shouldn't make plain `requireActual()` count.
+        assert_imports_with_aliases("requireActual('hest');", vec!["jest.requireActual"], vec![]);
+    }
+
+    #[test]
+    fn test_alias_bare_does_not_match_member_call() {
+        assert_imports_with_aliases("jest.requireActual('hest');", vec!["requireActual"], vec![]);
+    }
+
+    #[test]
+    fn test_alias_does_not_match_nested_member_path() {
+        // foo.jest.requireActual('hest') — the outer object isn't `jest`.
+        assert_imports_with_aliases(
+            "foo.jest.requireActual('hest');",
+            vec!["jest.requireActual"],
+            vec![],
+        );
+    }
+
+    #[test]
+    fn test_alias_multiple_aliases_one_source() {
+        assert_imports_with_aliases(
+            "jest.requireActual('a'); vi.importActual('b'); requireActual('c');",
+            vec!["jest.requireActual", "vi.importActual", "requireActual"],
+            vec!["a", "b", "c"],
+        );
+    }
+
+    #[test]
+    fn test_alias_no_arguments_errors() {
+        let parsed = vec![RequireAlias::parse("jest.requireActual")];
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "jest.requireActual();",
+            None,
+            false,
+            &parsed,
+        );
+        assert!(!ret.errors.is_empty());
+        assert!(ret.imports_paths.is_empty());
+    }
+
+    #[test]
+    fn test_alias_variable_argument_errors() {
+        let parsed = vec![RequireAlias::parse("jest.requireActual")];
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "const x = 'hest'; jest.requireActual(x);",
+            None,
+            false,
+            &parsed,
+        );
+        assert!(!ret.errors.is_empty());
+        assert!(ret.imports_paths.is_empty());
+    }
+
+    #[test]
+    fn test_alias_template_literal_argument_errors() {
+        // Template literals are not accepted (mirrors require() handling).
+        let parsed = vec![RequireAlias::parse("jest.requireActual")];
+        let ret = collect_imports(
+            SourceType::mjs(),
+            "jest.requireActual(`hest`);",
+            None,
+            false,
+            &parsed,
+        );
+        assert!(!ret.errors.is_empty());
+        assert!(ret.imports_paths.is_empty());
     }
 }

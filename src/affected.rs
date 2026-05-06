@@ -12,7 +12,7 @@ use crate::changeset::{
     bare_specifier_segments, matches_changed_package, node_modules_segments, parse_changed_entry,
     ChangedEntry,
 };
-use crate::imports;
+use crate::imports::{self, RequireAlias};
 
 pub struct AffectedReturn {
     pub errors: Vec<String>,
@@ -65,6 +65,7 @@ fn scan_file(
     module_paths: &HashSet<&str>,
     changed_packages: &HashSet<String>,
     ignore_type_imports: bool,
+    require_aliases: &[RequireAlias],
 ) -> FileScan {
     let mut parser_errors = Vec::new();
     let mut edges = Vec::new();
@@ -90,6 +91,7 @@ fn scan_file(
         source_text.as_str(),
         Some(&absolute_path),
         ignore_type_imports,
+        require_aliases,
     );
     parser_errors.extend(result.errors);
 
@@ -147,7 +149,12 @@ pub fn collect_affected(
     changes: Vec<&str>,
     resolver: Resolver,
     ignore_type_imports: bool,
+    require_aliases: Vec<&str>,
 ) -> AffectedReturn {
+    let require_aliases: Vec<RequireAlias> = require_aliases
+        .iter()
+        .map(|s| RequireAlias::parse(s))
+        .collect();
     let current_dir = env::current_dir().unwrap();
     let module_paths: HashSet<&str> =
         HashSet::from_iter(resolver.options().modules.iter().map(|m| m.as_str()));
@@ -199,6 +206,7 @@ pub fn collect_affected(
                     &module_paths,
                     &changed_packages,
                     ignore_type_imports,
+                    &require_aliases,
                 )
             })
             .collect();
@@ -292,7 +300,7 @@ mod tests {
         resolver: Resolver,
         ignore_type_imports: bool,
     ) {
-        let ret = collect_affected(test_files, changes, resolver, ignore_type_imports);
+        let ret = collect_affected(test_files, changes, resolver, ignore_type_imports, vec![]);
         let expected: HashSet<String> = HashSet::from_iter(expected.iter().map(|s| s.to_string()));
         let actual: HashSet<String> = HashSet::from_iter(ret.files.iter().map(|s| s.to_string()));
         let no_errors: Vec<String> = vec![];
@@ -472,7 +480,7 @@ mod tests {
     #[test]
     fn test_bad_import() {
         let file_name = "fixtures/bad-import.js";
-        let ret = collect_affected(vec![file_name], vec![], Resolver::default(), false);
+        let ret = collect_affected(vec![file_name], vec![], Resolver::default(), false, vec![]);
         assert_eq!(
             ret.errors,
             vec![format!("[{file_name}]\nCannot find module 'bad-import'")]
@@ -585,6 +593,7 @@ mod tests {
             vec!["npm:"],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
     }
 
@@ -596,6 +605,7 @@ mod tests {
             vec![""],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
     }
 
@@ -644,6 +654,7 @@ mod tests {
             vec!["npm:not-installed-pkg"],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
         assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
         assert_eq!(
@@ -661,6 +672,7 @@ mod tests {
             vec!["npm:something-else"],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
         assert_eq!(ret.errors.len(), 1);
         assert!(ret.errors[0].contains("not-installed-pkg"));
@@ -675,6 +687,7 @@ mod tests {
             vec!["npm:not-installed-pkg"],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
         assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
         assert_eq!(
@@ -691,12 +704,48 @@ mod tests {
             vec!["npm:@unresolved"],
             Resolver::new(ResolveOptions::default()),
             false,
+            vec![],
         );
         assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
         assert_eq!(
             ret.files,
             vec!["fixtures/unresolved-pkg/uses-scoped-missing.js".to_string()],
         );
+    }
+
+    // ---- require_aliases option -----------------------------------------
+
+    #[test]
+    fn test_require_alias_jest_propagates() {
+        // `jest.requireActual('./module.js')` should be treated as a
+        // dependency on `./module.js` when `jest.requireActual` is configured.
+        let ret = collect_affected(
+            vec!["fixtures/require-alias/uses-jest-actual.js"],
+            vec!["fixtures/require-alias/module.js"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+            vec!["jest.requireActual"],
+        );
+        assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
+        assert_eq!(
+            ret.files,
+            vec!["fixtures/require-alias/uses-jest-actual.js".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_require_alias_unconfigured_does_nothing() {
+        // Without the alias configured, `jest.requireActual('./module.js')` is
+        // not collected, so a change to `module.js` doesn't flag the file.
+        let ret = collect_affected(
+            vec!["fixtures/require-alias/uses-jest-actual.js"],
+            vec!["fixtures/require-alias/module.js"],
+            Resolver::new(ResolveOptions::default()),
+            false,
+            vec![],
+        );
+        assert!(ret.errors.is_empty(), "unexpected errors: {:?}", ret.errors);
+        assert!(ret.files.is_empty());
     }
 
     #[test]
