@@ -17,16 +17,12 @@ pub fn is_pure_barrel(source_type: SourceType, source_text: &str) -> bool {
 
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source_text, source_type).parse();
-    parsed.errors.is_empty()
+    parsed.diagnostics.is_empty()
         && parsed.program.directives.is_empty()
         && !parsed.program.body.is_empty()
         && parsed.program.body.iter().all(|statement| match statement {
             Statement::ExportAllDeclaration(_) => true,
-            Statement::ExportNamedDeclaration(export) => {
-                export.source.is_some()
-                    && export.declaration.is_none()
-                    && !export.specifiers.is_empty()
-            }
+            Statement::ExportFromDeclaration(export) => !export.specifiers.is_empty(),
             _ => false,
         })
 }
