@@ -16,6 +16,7 @@ Speed up your monorepo pipeline by only running the tests affected by your code 
 - **Configurable** resolver, with support for extensions, export conditions and more
 - **High performance** because it is **written in Rust** using Oxc
 - Easy to use with **Node API**
+- Aware of **barrel files** and type only imports
 
 ## Installation
 

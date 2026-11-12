@@ -58,6 +58,16 @@ struct FileScan {
     edges: Vec<ScanEdge>,
 }
 
+fn is_pure_barrel_file(path: &Path) -> bool {
+    let Ok(source_type) = SourceType::from_path(path) else {
+        return false;
+    };
+    let Ok(source_text) = fs::read_to_string(path) else {
+        return false;
+    };
+    imports::is_pure_barrel(source_type, &source_text)
+}
+
 fn scan_file(
     absolute_path: PathBuf,
     resolver: &Resolver,
@@ -164,7 +174,11 @@ pub fn collect_affected(
     for entry in changes {
         match parse_changed_entry(entry, &current_dir) {
             ChangedEntry::File(p) => {
-                affected.insert(p);
+                // Ignore changes to a barrel itself, but leave it in the import
+                // graph so changes to its re-exported modules still propagate.
+                if !is_pure_barrel_file(&p) {
+                    affected.insert(p);
+                }
             }
             ChangedEntry::Package(name) => {
                 changed_packages.insert(name);
@@ -367,7 +381,7 @@ mod tests {
         assert_collect_affected(
             test_files.to_vec(),
             vec![changes[0]],
-            vec![test_files[0]],
+            vec![], // module.js contains only a re-export.
             Resolver::new(ResolveOptions::default()),
         );
         assert_affected(test_files.to_vec(), vec![changes[1]]);
@@ -376,6 +390,68 @@ mod tests {
             vec!["fixtures/nested/another-module.js"],
             test_files.to_vec(),
             Resolver::new(ResolveOptions::default()),
+        );
+    }
+
+    #[test]
+    fn test_barrel_changes_ignored() {
+        let test_files = vec!["fixtures/barrels/suite.spec.js"];
+        assert_unaffected(test_files.clone(), vec!["fixtures/barrels/index.js"]);
+        assert_unaffected(test_files.clone(), vec!["fixtures/nested/module.js"]);
+        assert_unaffected(
+            test_files,
+            vec![
+                "file:fixtures/barrels/index.js",
+                "fixtures/nested/module.js",
+            ],
+        );
+        // Directly listed entry points use the same barrel filtering.
+        assert_unaffected(
+            vec!["fixtures/barrels/index.js"],
+            vec!["fixtures/barrels/index.js"],
+        );
+    }
+
+    #[test]
+    fn test_changes_propagate_through_changed_barrels() {
+        assert_affected(
+            vec!["fixtures/barrels/suite.spec.js"],
+            vec![
+                "fixtures/barrels/index.js",
+                "fixtures/nested/module.js",
+                "fixtures/nested/another-module.js",
+            ],
+        );
+        assert_affected(
+            vec!["fixtures/barrels/index.js"],
+            vec![
+                "fixtures/barrels/index.js",
+                "fixtures/nested/another-module.js",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_mixed_barrel_changes_still_affect_tests() {
+        assert_affected(
+            vec!["fixtures/barrels/mixed.spec.js"],
+            vec!["fixtures/barrels/mixed.js"],
+        );
+        assert_affected(
+            vec!["fixtures/barrels/side-effect.spec.js"],
+            vec!["fixtures/barrels/side-effect.js"],
+        );
+    }
+
+    #[test]
+    fn test_unreadable_and_non_source_changes_preserved() {
+        assert_affected(
+            vec!["fixtures/barrels/deleted.js"],
+            vec!["fixtures/barrels/deleted.js"],
+        );
+        assert_affected(
+            vec!["fixtures/nested/file.json"],
+            vec!["fixtures/nested/file.json"],
         );
     }
 
@@ -635,7 +711,7 @@ mod tests {
     fn test_file_prefix_equivalent_to_no_prefix() {
         assert_collect_affected(
             vec!["fixtures/nested/module.spec.js"],
-            vec!["file:fixtures/nested/module.js"],
+            vec!["file:fixtures/nested/sub-module.js"],
             vec!["fixtures/nested/module.spec.js"],
             Resolver::new(ResolveOptions::default()),
         );
@@ -756,6 +832,15 @@ mod tests {
                 "fixtures/npm/uses-lodash.js",
             ],
             vec!["fixtures/nested/module.js", "npm:lodash"],
+            vec!["fixtures/npm/uses-lodash.js"],
+            Resolver::new(ResolveOptions::default()),
+        );
+        assert_collect_affected(
+            vec![
+                "fixtures/nested/module.spec.js",
+                "fixtures/npm/uses-lodash.js",
+            ],
+            vec!["fixtures/nested/sub-module.js", "npm:lodash"],
             vec![
                 "fixtures/nested/module.spec.js",
                 "fixtures/npm/uses-lodash.js",

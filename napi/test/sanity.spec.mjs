@@ -24,6 +24,23 @@ const affected = getAffected(testFiles, changes, resolverOptions);
 assert.deepEqual(affected.errors, []);
 assert.deepEqual(affected.files.sort(), testFiles.sort());
 
+const barrelChanges = [join(fixturesPath, "module.js")];
+const barrelIgnored = getAffected(testFiles, barrelChanges, resolverOptions);
+assert.deepEqual(barrelIgnored.errors, []);
+assert.deepEqual(barrelIgnored.files, []);
+
+const barrelAndSourceChanged = getAffected(
+  testFiles,
+  [...barrelChanges, ...changes],
+  resolverOptions
+);
+assert.deepEqual(barrelAndSourceChanged.errors, []);
+assert.deepEqual(barrelAndSourceChanged.files.sort(), testFiles.sort());
+
+const directlyChangedTest = getAffected(testFiles, [testFiles[0]], resolverOptions);
+assert.deepEqual(directlyChangedTest.errors, []);
+assert.deepEqual(directlyChangedTest.files, [testFiles[0]]);
+
 const tsFixturesPath = resolve(
   fileURLToPath(import.meta.url),
   "../../../fixtures/typescript"
