@@ -1,4 +1,4 @@
-use oxc::diagnostics::{Error, NamedSource, OxcDiagnostic};
+use oxc::diagnostics::{NamedSource, OxcDiagnostic};
 use oxc_allocator::Allocator;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -84,7 +84,7 @@ pub fn collect_imports(
     };
     ast_pass.visit_program(&program);
 
-    let errors = if parsed.errors.is_empty() && ast_pass.errors.is_empty() {
+    let errors = if parsed.diagnostics.is_empty() && ast_pass.errors.is_empty() {
         vec![]
     } else {
         let file_name = if source_filename.is_none() {
@@ -98,11 +98,11 @@ pub fn collect_imports(
                 .unwrap_or_default()
         };
         let source = Arc::new(NamedSource::new(file_name, source_text.to_string()));
-        [parsed.errors, ast_pass.errors]
-            .concat()
+        parsed
+            .diagnostics
             .into_iter()
-            .map(|diagnostic| Error::from(diagnostic).with_source_code(Arc::clone(&source)))
-            .map(|error| format!("{error:?}"))
+            .chain(ast_pass.errors)
+            .map(|diagnostic| diagnostic.render_with_source_code(Arc::clone(&source)))
             .collect()
     };
 
@@ -129,7 +129,7 @@ fn is_type_only_import(it: &oxc_ast::ast::ImportDeclaration<'_>) -> bool {
     })
 }
 
-fn is_type_only_named_export(it: &oxc_ast::ast::ExportNamedDeclaration<'_>) -> bool {
+fn is_type_only_re_export(it: &oxc_ast::ast::ExportFromDeclaration<'_>) -> bool {
     if it.export_kind.is_type() {
         return true;
     }
@@ -144,6 +144,20 @@ struct CollectImports<'b> {
     import_paths: HashSet<String>,
     ignore_type_imports: bool,
     require_aliases: &'b [RequireAlias],
+}
+
+impl CollectImports<'_> {
+    fn add_import_path(&mut self, literal: &oxc_ast::ast::StringLiteral<'_>) {
+        match literal.value.as_str() {
+            Some(path) => {
+                self.import_paths.insert(path.to_string());
+            }
+            None => self.errors.push(
+                OxcDiagnostic::error("Module path must not contain lone surrogates")
+                    .with_label(literal.span),
+            ),
+        }
+    }
 }
 
 enum RequireCallMatch<'a> {
@@ -178,7 +192,8 @@ fn match_require_call<'a>(
                     return RequireCallMatch::None;
                 };
                 aliases.iter().any(|a| {
-                    a.object.as_deref() == Some(obj_id.name.as_str()) && a.method == prop_name
+                    a.object.as_deref() == Some(obj_id.name.as_str())
+                        && a.method.as_str() == prop_name
                 })
             }
             None => false,
@@ -201,14 +216,14 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         if self.ignore_type_imports && is_type_only_import(it) {
             return;
         }
-        self.import_paths.insert(it.source.value.to_string());
+        self.add_import_path(&it.source);
         walk::walk_import_declaration(self, it);
     }
 
     fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
         match &it.source {
             oxc_ast::ast::Expression::StringLiteral(literal) => {
-                self.import_paths.insert(literal.value.to_string());
+                self.add_import_path(literal);
             }
             oxc_ast::ast::Expression::TemplateLiteral(literal) => {
                 if literal.expressions.len() == 0 {
@@ -232,21 +247,19 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         walk::walk_import_expression(self, it);
     }
 
-    fn visit_export_named_declaration(&mut self, it: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
-        if self.ignore_type_imports && is_type_only_named_export(it) {
+    fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
+        if self.ignore_type_imports && is_type_only_re_export(it) {
             return;
         }
-        if let Some(source) = &it.source {
-            self.import_paths.insert(source.value.to_string());
-        }
-        walk::walk_export_named_declaration(self, it);
+        self.add_import_path(&it.source);
+        walk::walk_export_from_declaration(self, it);
     }
 
     fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
         if self.ignore_type_imports && it.export_kind.is_type() {
             return;
         }
-        self.import_paths.insert(it.source.value.to_string());
+        self.add_import_path(&it.source);
         walk::walk_export_all_declaration(self, it);
     }
 
@@ -254,7 +267,7 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         if self.ignore_type_imports {
             return;
         }
-        self.import_paths.insert(it.source.value.to_string());
+        self.add_import_path(&it.source);
         walk::walk_ts_import_type(self, it);
     }
 
@@ -267,7 +280,7 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         }
         if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(ext) = &it.module_reference
         {
-            self.import_paths.insert(ext.expression.value.to_string());
+            self.add_import_path(&ext.expression);
         }
         walk::walk_ts_import_equals_declaration(self, it);
     }
@@ -276,7 +289,7 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         match match_require_call(it, &self.require_aliases) {
             RequireCallMatch::None => {}
             RequireCallMatch::Path(literal) => {
-                self.import_paths.insert(literal.value.to_string());
+                self.add_import_path(literal);
             }
             RequireCallMatch::InvalidArgs => {
                 self.errors.push(
@@ -434,6 +447,46 @@ mod tests {
     #[test]
     fn test_invalid_syntax() {
         asset_error("import snel from 'hest'; const;");
+    }
+
+    #[test]
+    fn test_escaped_unicode_module_paths() {
+        for source in [
+            r"import '\u{1F40E}';",
+            r"import('\uD83D\uDC0E');",
+            r"require('\u{1F40E}');",
+            r"export { hest } from '\u{1F40E}';",
+            r"export * from '\u{1F40E}';",
+            r"type Hest = import('\u{1F40E}');",
+            r"import hest = require('\u{1F40E}');",
+        ] {
+            assert_ts_imports(source, vec!["🐎"], false);
+        }
+    }
+
+    #[test]
+    fn test_lone_surrogate_module_path_does_not_match_literal_escape() {
+        let ret = collect_imports(
+            SourceType::mjs(),
+            r"require('\ud800'); require('\\ud800');",
+            None,
+            false,
+            &[],
+        );
+        assert_eq!(ret.imports_paths, vec![r"\ud800"]);
+        assert_eq!(ret.errors.len(), 1);
+        assert!(ret.errors[0].contains("Module path must not contain lone surrogates"));
+    }
+
+    #[test]
+    fn test_diagnostics_include_filename_and_source() {
+        let filename = env::current_dir().unwrap().join("diagnostic.ts");
+        for source in ["const = 1;", "import(variable);"] {
+            let ret = collect_imports(SourceType::ts(), source, Some(&filename), false, &[]);
+            assert!(!ret.errors.is_empty());
+            assert!(ret.errors[0].contains("diagnostic.ts"));
+            assert!(ret.errors[0].contains(source));
+        }
     }
 
     #[test]
