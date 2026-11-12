@@ -10,6 +10,27 @@ pub struct ImportsReturn {
     pub imports_paths: Vec<String>,
 }
 
+/// Only direct re-exports count: local declarations, imports, directives and
+/// invalid syntax must keep a changed file in the affected set.
+pub fn is_pure_barrel(source_type: SourceType, source_text: &str) -> bool {
+    use oxc_ast::ast::Statement;
+
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source_text, source_type).parse();
+    parsed.errors.is_empty()
+        && parsed.program.directives.is_empty()
+        && !parsed.program.body.is_empty()
+        && parsed.program.body.iter().all(|statement| match statement {
+            Statement::ExportAllDeclaration(_) => true,
+            Statement::ExportNamedDeclaration(export) => {
+                export.source.is_some()
+                    && export.declaration.is_none()
+                    && !export.specifiers.is_empty()
+            }
+            _ => false,
+        })
+}
+
 /// A function call that should be collected as if it were a `require()` —
 /// e.g. `jest.requireActual('foo')` or `vi.importActual('foo')`. Built from a
 /// dotted string via [`RequireAlias::parse`].
@@ -271,6 +292,42 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pure_barrels() {
+        for source in [
+            "export * from './module';",
+            "export * as module from './module';",
+            "export { value, default as other } from './module';",
+            "export { default } from './module';",
+            "export type { Value } from './module';",
+            "export { type Value } from './module';",
+            "export type * from './module';",
+            "// Barrel\nexport * from './first';\nexport { value } from './second';",
+        ] {
+            assert!(is_pure_barrel(SourceType::ts(), source), "{source}");
+        }
+    }
+
+    #[test]
+    fn test_non_barrels() {
+        for source in [
+            "",
+            "// No exports",
+            "export {};",
+            "export {} from './module';",
+            "export const value = 1;",
+            "export default 1;",
+            "import { value } from './module'; export { value };",
+            "export * from './module'; import './side-effect';",
+            "export * from './module'; console.log('side effect');",
+            "export * from './module'; const value = 1;",
+            "'use client'; export * from './module';",
+            "export * from './module'; const;",
+        ] {
+            assert!(!is_pure_barrel(SourceType::ts(), source), "{source}");
+        }
+    }
 
     fn assert_imports(source_text: &str, expected_imports: Vec<&str>) {
         let ret = collect_imports(SourceType::mjs(), source_text, None, false, &[]);
