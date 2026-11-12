@@ -3,7 +3,7 @@ name         = "sovra_napi"
 version      = "0.0.0"
 publish      = false
 edition      = "2021"
-rust-version = "1.93"
+rust-version = "1.97"
 
 [lib]
 crate-type = ["cdylib"]
@@ -11,7 +11,7 @@ test       = false
 doctest    = false
 
 [dependencies]
-oxc_resolver = "11.19.1"
+oxc_resolver = "11.24.3"
 sovra = { path = ".." }
 napi = { version = "3.8.5", default-features = false, features = ["napi3", "serde-json"] }
 napi-derive = { version = "3.5.4" }
