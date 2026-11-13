@@ -1,0 +1,30 @@
+{
+  "name": "@sovra/vitest",
+  "version": "0.0.0",
+  "description": "Run only the Vitest 4 tests affected by a change with sovra",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oblador/sovra.git",
+    "directory": "packages/vitest"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "sovra-vitest": "dist/cli.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "yarn --cwd ../core build && yarn build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.spec.mjs\""
+  },
+  "dependencies": { "@sovra/core": "*" },
+  "peerDependencies": { "vitest": "^4.0.0" },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10"
+  },
+  "publishConfig": { "registry": "https://registry.npmjs.org/", "access": "public" }
+}

@@ -196,6 +196,18 @@ jobs:
             echo '----'
           done
 
+      - name: Build TypeScript packages
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          npm pkg set "version=${RELEASE_VERSION}" --prefix packages/core
+          npm pkg set "version=${RELEASE_VERSION}" --prefix packages/jest
+          npm pkg set "version=${RELEASE_VERSION}" --prefix packages/vitest
+          npm pkg set "dependencies.sovra=^${RELEASE_VERSION}" --prefix packages/core
+          npm pkg set "dependencies.@sovra/core=^${RELEASE_VERSION}" --prefix packages/jest
+          npm pkg set "dependencies.@sovra/core=^${RELEASE_VERSION}" --prefix packages/vitest
+          yarn build:packages
+
       - name: Generate .npmrc
         run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > .npmrc
 
@@ -209,5 +221,9 @@ jobs:
           do
             npm publish $package/ --provenance --access public
           done
-          # publish root package last
+          # publish the root binding package before its TypeScript consumers
           npm publish npm/sovra/ --provenance --access public
+          # publish the TypeScript packages in dependency order
+          npm publish packages/core/ --provenance --access public
+          npm publish packages/jest/ --provenance --access public
+          npm publish packages/vitest/ --provenance --access public

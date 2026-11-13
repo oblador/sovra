@@ -26,3 +26,11 @@ node_modules
 !/npm/sovra
 
 /napi/*.node
+
+# napi binding artifacts generated locally into the published package dir
+/npm/sovra/index.js
+/npm/sovra/index.d.ts
+/npm/sovra/*.node
+
+# Compiled output of the TypeScript workspace packages
+/packages/*/dist

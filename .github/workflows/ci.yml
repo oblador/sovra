@@ -63,4 +63,5 @@ jobs:
       - uses: ./.github/actions/setup
       - run: yarn build
       - run: node --test napi/test/sanity.spec.mjs
+      - run: yarn test:packages
       - run: git diff --exit-code # Must commit generated bindings (index.d.ts/index.js)

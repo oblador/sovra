@@ -127,12 +127,12 @@ fn scan_file(
                 if matched {
                     edges.push(ScanEdge::NpmFallbackMatched);
                 } else {
-                    let relative_path = absolute_path
-                        .strip_prefix(current_dir)
-                        .unwrap_or(&absolute_path)
-                        .to_str()
-                        .unwrap_or("unknown file");
-                    edges.push(ScanEdge::UnresolvedError(format!("[{relative_path}]\n{e}")));
+                    let relative_path = pathdiff::diff_paths(&absolute_path, current_dir)
+                        .unwrap_or_else(|| absolute_path.clone());
+                    edges.push(ScanEdge::UnresolvedError(format!(
+                        "[{}]\n{e}",
+                        relative_path.display()
+                    )));
                 }
             }
             Ok(resolution) => {

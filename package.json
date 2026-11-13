@@ -2,16 +2,24 @@
   "name": "@sovra/binding",
   "private": true,
   "version": "0.0.0",
+  "workspaces": [
+    "npm/sovra",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "napi build --platform --release --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml",
-    "build:debug": "napi build --platform --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml",
-    "test": "cargo test && node --test napi/test/sanity.spec.mjs",
+    "build": "yarn build:napi && yarn build:packages",
+    "build:debug": "napi build --platform --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml --output-dir npm/sovra && yarn build:packages",
+    "build:napi": "napi build --platform --release --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml --output-dir npm/sovra",
+    "build:packages": "yarn workspace @sovra/core build && yarn workspace @sovra/jest build && yarn workspace @sovra/vitest build",
+    "test": "yarn test:napi && yarn test:packages",
+    "test:napi": "cargo test && node --test napi/test/sanity.spec.mjs",
+    "test:packages": "yarn build:packages && yarn workspace @sovra/core test && yarn workspace @sovra/jest test && yarn workspace @sovra/vitest test",
     "prepublishOnly": "napi pre-publish -t npm"
   },
   "devDependencies": {
     "@napi-rs/cli": "3.6.2",
     "@types/node": "^24.0.0",
-    "typescript": "^5.5.3"
+    "typescript": "^5.7.3"
   },
   "repository": {
     "type": "git",
