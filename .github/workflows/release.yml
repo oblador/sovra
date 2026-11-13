@@ -76,7 +76,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             code-target: linux-arm64-musl
 
-          - os: macos-14 # M1
+          - os: macos-15 # ARM64
             target: aarch64-apple-darwin
             code-target: darwin-arm64
 
@@ -136,7 +136,10 @@ jobs:
       - name: Test
         working-directory: napi
         if: ${{ contains(matrix.target, 'x86') && !contains(matrix.target, 'musl') }} # Need docker for aarch64
-        run: node --test test/sanity.spec.mjs
+        run: |
+          # Match the package layout used by local builds and publishing.
+          cp index.js index.d.ts sovra.${{ matrix.code-target }}.node ../npm/sovra/
+          node --test test/sanity.spec.mjs
 
       # The binary is zipped to fix permission loss https://github.com/actions/upload-artifact#permission-loss
       - name: Archive Binary
