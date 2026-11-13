@@ -1,0 +1,39 @@
+{
+  "name": "@sovra/core",
+  "version": "0.0.0",
+  "description": "Runner-agnostic core for sovra-based affected-test selection: decision engine, git change source, and version-aware lockfile dependency diffing",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oblador/sovra.git",
+    "directory": "packages/core"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": { "node": ">=24.0.0" },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "yarn build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.spec.mjs\""
+  },
+  "dependencies": {
+    "@yarnpkg/lockfile": "^1.1.0",
+    "js-yaml": "^4.1.0",
+    "picomatch": "^4.0.4",
+    "sovra": "*"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "@types/picomatch": "^4.0.2",
+    "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  }
+}

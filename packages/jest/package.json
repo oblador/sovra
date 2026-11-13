@@ -1,0 +1,41 @@
+{
+  "name": "@sovra/jest",
+  "version": "0.0.0",
+  "description": "Glue between sovra (the test decider) and jest (the test runner) — run only the tests affected by a change",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oblador/sovra.git",
+    "directory": "packages/jest"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": { "node": ">=24.0.0" },
+  "bin": {
+    "sovra-jest": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "yarn --cwd ../core build && yarn build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.spec.mjs\""
+  },
+  "dependencies": {
+    "@sovra/core": "*"
+  },
+  "peerDependencies": {
+    "jest": "^29.0.0 || ^30.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "jest": "^29.7.0",
+    "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  }
+}

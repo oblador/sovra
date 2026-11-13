@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2024",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": { "local-types/*": ["./types/*"] }
+  },
+  "include": ["*.ts"]
+}

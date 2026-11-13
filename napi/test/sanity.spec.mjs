@@ -2,7 +2,7 @@
 import * as assert from "node:assert";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAffected } from "../index.js";
+import { getAffected } from "../../npm/sovra/index.js";
 
 const fixturesPath = resolve(
   fileURLToPath(import.meta.url),
@@ -14,7 +14,7 @@ const testFiles = [
   join(fixturesPath, "sub-module.spec.js"),
 ];
 const changes = [join(fixturesPath, "another-module.js")];
-/** @type {import('..').NapiResolveOptions} */
+/** @type {import('../../npm/sovra').NapiResolveOptions} */
 const resolverOptions = {
   extensions: [".js", ".jsx", ".ts", ".tsx"],
 };
@@ -45,7 +45,7 @@ const tsFixturesPath = resolve(
   fileURLToPath(import.meta.url),
   "../../../fixtures/typescript"
 );
-/** @type {import('..').NapiResolveOptions} */
+/** @type {import('../../npm/sovra').NapiResolveOptions} */
 const tsResolverOptions = {
   extensions: [".ts"],
   tsconfig: {

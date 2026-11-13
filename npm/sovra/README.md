@@ -26,7 +26,21 @@ yarn add sovra
 
 ## Usage
 
-### `getAffected(testFiles: string[], changes: string[], resolverOptions: OxcResolverOptions, ignoreTypeImports?: boolean, requireAliases?: string[])`
+### Test runner integrations
+
+Use [@sovra/jest](https://github.com/oblador/sovra/tree/main/packages/jest) for Jest 29+ or
+[@sovra/vitest](https://github.com/oblador/sovra/tree/main/packages/vitest) for Vitest 4+. These packages discover
+tests from your existing configuration, analyze source and lockfile changes,
+and execute only affected tests. pnpm linker and public-hoisting settings are
+respected by the shared [dependency analysis](https://github.com/oblador/sovra/blob/main/docs/dependency-analysis.md#linker-and-hoisting-settings).
+Both integrations require Node.js 24 or newer.
+
+```sh
+pnpm add -D @sovra/vitest vitest@^4
+pnpm exec sovra-vitest --base main
+```
+
+### `getAffected(testFiles: string[], changes: string[], resolverOptions: NapiResolveOptions, ignoreTypeImports?: boolean, requireAliases?: string[])`
 
 Returns a subset of `testFiles` that have `changes` in their import graph. This is useful in order to determine which tests to run in a large repo.
 
@@ -61,14 +75,15 @@ Empty entries (`""`, `"npm:"`, `"file:"`) panic — they're treated as caller bu
 
 ```ts
 import { getAffected } from "sovra";
-import { execSync } from "node:child_process";
-import { glob } from "glob";
+import { execFileSync } from "node:child_process";
+import { globSync } from "node:fs";
 
-const testFiles = glob.sync("src/**/*.spec.{ts,tsx}");
-const changes = execSync("git diff --name-only main", { encoding: "utf8" })
-  .trim()
-  .split("\n");
+const testFiles = [...globSync("src/**/*.spec.{ts,tsx}")];
+const changes = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", "main", "--"], { encoding: "utf8" })
+  .split("\0")
+  .filter(Boolean);
 const resolverOptions = {
+  builtinModules: true,
   tsconfig: {
     configFile: "tsconfig.json",
   },
@@ -76,11 +91,11 @@ const resolverOptions = {
 
 const affected = getAffected(testFiles, changes, resolverOptions);
 
-if (affected.errors) {
-  console.error(...affected.errors);
-} else {
-  console.log(affected.files);
+if (affected.errors.length > 0) {
+  throw new Error(affected.errors.join("\n"));
 }
+
+console.log(affected.files);
 ```
 
 ## Test
@@ -97,6 +112,9 @@ Imports using variables or expressions are not supported as they can only be det
 require(process.env.SOME_VAR + ".js"); // ❌
 import(`./file.${platform}.mjs`); // ❌
 ```
+
+The low-level API reports incomplete analysis in `errors`. Do not treat a
+partial result as a complete test selection; consider failing the command or running all tests.
 
 ## License
 
