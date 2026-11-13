@@ -83,15 +83,14 @@ pub fn collect_imports(
     let errors = if parsed.diagnostics.is_empty() && ast_pass.errors.is_empty() {
         vec![]
     } else {
-        let file_name = if source_filename.is_none() {
-            "unknown file"
-        } else {
-            source_filename
-                .unwrap()
-                .strip_prefix(env::current_dir().unwrap())
-                .unwrap()
-                .to_str()
-                .unwrap_or_default()
+        let file_name = match source_filename {
+            None => "unknown file".to_string(),
+            Some(path) => env::current_dir()
+                .ok()
+                .and_then(|cwd| pathdiff::diff_paths(path, cwd))
+                .unwrap_or_else(|| path.clone())
+                .to_string_lossy()
+                .into_owned(),
         };
         let source = Arc::new(NamedSource::new(file_name, source_text.to_string()));
         parsed
@@ -335,6 +334,34 @@ mod tests {
             "export * from './module'; const;",
         ] {
             assert!(!is_pure_barrel(SourceType::ts(), source), "{source}");
+        }
+    }
+
+    #[test]
+    fn diagnostics_use_relative_filenames() {
+        let cwd = env::current_dir().unwrap();
+        for (filename, expected) in [
+            (Some(cwd.join("inside.js")), PathBuf::from("inside.js")),
+            (
+                Some(cwd.parent().unwrap().join("outside.js")),
+                PathBuf::from("..").join("outside.js"),
+            ),
+            (
+                Some(PathBuf::from("relative.js")),
+                PathBuf::from("relative.js"),
+            ),
+            (None, PathBuf::from("unknown file")),
+        ] {
+            let result = collect_imports(
+                SourceType::mjs(),
+                "require(variable);",
+                filename.as_ref(),
+                false,
+                &[],
+            );
+            assert_eq!(result.errors.len(), 1);
+            assert!(result.errors[0].contains(expected.to_str().unwrap()));
+            assert!(!result.errors[0].contains(cwd.to_str().unwrap()));
         }
     }
 

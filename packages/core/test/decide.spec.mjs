@@ -221,6 +221,8 @@ for (const [name, source] of [
     const options = { config, changedFiles: ['README.md'] };
     assert.equal(decideAffected({ ...options, onError: (error) => errors.push(error) }).kind, 'run-all');
     assert.ok(errors.length > 0);
+    const relativeFile = path.relative(process.cwd(), config.projects[0].testFiles[0]);
+    assert.ok(errors.some((error) => error.includes(relativeFile)));
     assert.equal(decideAffected(options).kind, 'run-all');
   });
 }

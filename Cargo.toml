@@ -28,6 +28,7 @@ oxc_ast_visit = "0.158.0"
 oxc_parser    = "0.158.0"
 oxc_resolver  = "11.24.3"
 oxc_span      = "0.158.0"
+pathdiff      = "0.2.3"
 rayon         = "1"
 
 # For napi
