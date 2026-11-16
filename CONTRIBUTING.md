@@ -20,7 +20,7 @@ For the Rust tests, install the workspace fixture dependencies first, as CI does
 ```sh
 yarn --cwd fixtures/yarn-workspace install --immutable
 cargo test
-node --test napi/test/sanity.spec.mjs
+node --test napi/test/*.spec.mjs
 ```
 
 Use `yarn build` for an optimized native build before measuring performance.

@@ -12,7 +12,7 @@
     "build:napi": "napi build --platform --release --package-json-path npm/sovra/package.json --manifest-path napi/Cargo.toml --output-dir npm/sovra",
     "build:packages": "yarn workspace @sovra/core build && yarn workspace @sovra/jest build && yarn workspace @sovra/vitest build",
     "test": "yarn test:napi && yarn test:packages",
-    "test:napi": "cargo test && node --test napi/test/sanity.spec.mjs",
+    "test:napi": "cargo test && node --test napi/test/*.spec.mjs",
     "test:packages": "yarn build:packages && yarn workspace @sovra/core test && yarn workspace @sovra/jest test && yarn workspace @sovra/vitest test",
     "prepublishOnly": "napi pre-publish -t npm"
   },

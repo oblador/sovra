@@ -45,9 +45,8 @@ enum ScanEdge {
         import: PathBuf,
         is_in_node_modules: bool,
     },
-    /// Resolve failed but the bare specifier matched a changed npm
-    /// package — the importing file should be marked affected.
-    NpmFallbackMatched,
+    /// An explicit file input or unresolved npm import matched the changeset.
+    ChangedInput,
     /// Resolve failed and didn't match any changeset entry; surface it.
     UnresolvedError(String),
 }
@@ -74,6 +73,7 @@ fn scan_file(
     current_dir: &Path,
     module_paths: &HashSet<&str>,
     changed_packages: &HashSet<String>,
+    changed_files: &HashSet<PathBuf>,
     ignore_type_imports: bool,
     require_aliases: &[RequireAlias],
 ) -> FileScan {
@@ -113,6 +113,15 @@ fn scan_file(
         };
     };
 
+    if !result.inputs.is_empty()
+        && changed_files.iter().any(|file| {
+            pathdiff::diff_paths(file, parent_path)
+                .is_some_and(|relative| result.inputs.iter().any(|glob| glob.is_match(&relative)))
+        })
+    {
+        edges.push(ScanEdge::ChangedInput);
+    }
+
     edges.reserve(result.imports_paths.len());
     for import_path in result.imports_paths.iter() {
         match resolver.resolve(parent_path, import_path.as_str()) {
@@ -125,7 +134,7 @@ fn scan_file(
                     && bare_specifier_segments(import_path.as_str())
                         .is_some_and(|s| matches_changed_package(&s, changed_packages));
                 if matched {
-                    edges.push(ScanEdge::NpmFallbackMatched);
+                    edges.push(ScanEdge::ChangedInput);
                 } else {
                     let relative_path = pathdiff::diff_paths(&absolute_path, current_dir)
                         .unwrap_or_else(|| absolute_path.clone());
@@ -171,9 +180,11 @@ pub fn collect_affected(
 
     let mut affected: HashSet<PathBuf> = HashSet::new();
     let mut changed_packages: HashSet<String> = HashSet::new();
+    let mut changed_files: HashSet<PathBuf> = HashSet::new();
     for entry in changes {
         match parse_changed_entry(entry, &current_dir) {
             ChangedEntry::File(p) => {
+                changed_files.insert(p.clone());
                 // Ignore changes to a barrel itself, but leave it in the import
                 // graph so changes to its re-exported modules still propagate.
                 if !is_pure_barrel_file(&p) {
@@ -219,6 +230,7 @@ pub fn collect_affected(
                     &current_dir,
                     &module_paths,
                     &changed_packages,
+                    &changed_files,
                     ignore_type_imports,
                     &require_aliases,
                 )
@@ -232,7 +244,7 @@ pub fn collect_affected(
             for edge in scan.edges {
                 match edge {
                     ScanEdge::UnresolvedError(e) => errors.push(e),
-                    ScanEdge::NpmFallbackMatched => {
+                    ScanEdge::ChangedInput => {
                         extend_affected(&mut affected, &absolute_path, &dependents_map);
                     }
                     ScanEdge::Resolved {

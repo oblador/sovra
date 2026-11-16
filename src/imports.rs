@@ -5,9 +5,12 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::{collections::HashSet, env, path::PathBuf, sync::Arc};
 
+use crate::directives::{self, Directives};
+
 pub struct ImportsReturn {
     pub errors: Vec<String>,
     pub imports_paths: Vec<String>,
+    pub inputs: Vec<globset::GlobMatcher>,
 }
 
 /// Only direct re-exports count: local declarations, imports, directives and
@@ -18,6 +21,11 @@ pub fn is_pure_barrel(source_type: SourceType, source_text: &str) -> bool {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source_text, source_type).parse();
     parsed.diagnostics.is_empty()
+        && !parsed
+            .program
+            .comments
+            .iter()
+            .any(|comment| directives::is_directive(comment, source_text))
         && parsed.program.directives.is_empty()
         && !parsed.program.body.is_empty()
         && parsed.program.body.iter().all(|statement| match statement {
@@ -71,12 +79,14 @@ pub fn collect_imports(
     let parsed = Parser::new(&allocator, &source_text, source_type).parse();
 
     let program = parsed.program;
+    let (directives, directive_errors) = Directives::parse(&program.comments, source_text);
 
     let mut ast_pass = CollectImports {
-        errors: Vec::new(),
+        errors: directive_errors,
         import_paths: HashSet::new(),
         ignore_type_imports,
         require_aliases,
+        directives,
     };
     ast_pass.visit_program(&program);
 
@@ -104,6 +114,7 @@ pub fn collect_imports(
     let ret = ImportsReturn {
         errors,
         imports_paths: ast_pass.import_paths.into_iter().collect(),
+        inputs: ast_pass.directives.inputs,
     };
     ret
 }
@@ -139,6 +150,7 @@ struct CollectImports<'b> {
     import_paths: HashSet<String>,
     ignore_type_imports: bool,
     require_aliases: &'b [RequireAlias],
+    directives: Directives,
 }
 
 impl CollectImports<'_> {
@@ -208,7 +220,8 @@ fn match_require_call<'a>(
 
 impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
-        if self.ignore_type_imports && is_type_only_import(it) {
+        if self.directives.ignores(it.span) || (self.ignore_type_imports && is_type_only_import(it))
+        {
             return;
         }
         self.add_import_path(&it.source);
@@ -216,6 +229,10 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     }
 
     fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
+        if self.directives.ignores(it.span) {
+            walk::walk_import_expression(self, it);
+            return;
+        }
         match &it.source {
             oxc_ast::ast::Expression::StringLiteral(literal) => {
                 self.add_import_path(literal);
@@ -243,7 +260,9 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     }
 
     fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
-        if self.ignore_type_imports && is_type_only_re_export(it) {
+        if self.directives.ignores(it.span)
+            || (self.ignore_type_imports && is_type_only_re_export(it))
+        {
             return;
         }
         self.add_import_path(&it.source);
@@ -251,7 +270,9 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     }
 
     fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
-        if self.ignore_type_imports && it.export_kind.is_type() {
+        if self.directives.ignores(it.span)
+            || (self.ignore_type_imports && it.export_kind.is_type())
+        {
             return;
         }
         self.add_import_path(&it.source);
@@ -262,7 +283,9 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         if self.ignore_type_imports {
             return;
         }
-        self.add_import_path(&it.source);
+        if !self.directives.ignores(it.span) {
+            self.add_import_path(&it.source);
+        }
         walk::walk_ts_import_type(self, it);
     }
 
@@ -270,7 +293,9 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
         &mut self,
         it: &oxc_ast::ast::TSImportEqualsDeclaration<'a>,
     ) {
-        if self.ignore_type_imports && it.import_kind.is_type() {
+        if self.directives.ignores(it.span)
+            || (self.ignore_type_imports && it.import_kind.is_type())
+        {
             return;
         }
         if let oxc_ast::ast::TSModuleReference::ExternalModuleReference(ext) = &it.module_reference
@@ -281,16 +306,20 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
     }
 
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
-        match match_require_call(it, &self.require_aliases) {
-            RequireCallMatch::None => {}
-            RequireCallMatch::Path(literal) => {
-                self.add_import_path(literal);
-            }
-            RequireCallMatch::InvalidArgs => {
-                self.errors.push(
-                    OxcDiagnostic::error("Require call must have a single string literal argument")
+        if !self.directives.ignores(it.span) {
+            match match_require_call(it, &self.require_aliases) {
+                RequireCallMatch::None => {}
+                RequireCallMatch::Path(literal) => {
+                    self.add_import_path(literal);
+                }
+                RequireCallMatch::InvalidArgs => {
+                    self.errors.push(
+                        OxcDiagnostic::error(
+                            "Require call must have a single string literal argument",
+                        )
                         .with_label(it.span),
-                );
+                    );
+                }
             }
         }
         walk::walk_call_expression(self, it);
