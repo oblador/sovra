@@ -21,6 +21,7 @@ include      = ["/src"]
 doctest = false
 
 [dependencies]
+globset       = "0.4"
 oxc           = "0.158.0"
 oxc_allocator = "0.158.0"
 oxc_ast       = "0.158.0"

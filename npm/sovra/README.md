@@ -98,6 +98,19 @@ if (affected.errors.length > 0) {
 console.log(affected.files);
 ```
 
+### Source annotations
+
+Ignore an individual import or declare inputs that are read outside the import graph:
+
+```ts
+// sovra-ignore-next-line -- translation changes are handled separately
+import translations from "some-package/translations";
+
+// sovra-depends-on ./templates/**/*.html
+```
+
+Declared paths are relative to the annotated file. Globs match the changed-file list without searching the disk. Edits to the annotated file itself still affect its consumers. These comments work with `getAffected` and both runner integrations; see [annotation syntax and safety](https://github.com/oblador/sovra/blob/main/docs/usage.md#source-annotations).
+
 ## Test
 
 ```bash
@@ -115,6 +128,8 @@ import(`./file.${platform}.mjs`); // ❌
 
 The low-level API reports incomplete analysis in `errors`. Do not treat a
 partial result as a complete test selection; consider failing the command or running all tests.
+For known runtime inputs, you can explicitly replace an unsupported import with
+source annotations as described above.
 
 ## License
 

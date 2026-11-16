@@ -170,6 +170,70 @@ Node strips types, including `import type` and `satisfies`, but does not apply
 Programmatic config loads use Node's module cache; start a new process to reload
 an edited config or imported helper.
 
+## Source annotations
+
+Comments let you override individual dependency edges without changing Sovra's
+configuration. They work with the low-level `getAffected` API and both runners.
+
+### Ignoring an import
+
+```ts
+// sovra-ignore-next-line -- translation changes are handled separately
+import translations from 'some-package/translations';
+```
+
+This removes the annotated import from the affected graph. Changes to that
+dependency no longer propagate through this edge; other imports of the same
+dependency are unaffected. Edits to the importing file itself still affect its
+consumers. It does not change runtime behavior or exclude a test from execution.
+
+The directive applies to imports, re-exports, `require()` calls, and configured
+require aliases that **start on the immediately following line**. Multiline
+imports are supported; put the comment above the opening `import`, not above its
+`from` clause. A blank line breaks the association. Imports inside call arguments
+on later lines are still analyzed.
+
+Use this only when changes are irrelevant to the tests or handled separately:
+ignoring a real dependency can otherwise skip tests that should run.
+
+### Declaring additional file inputs
+
+Declare files read through `fs`, runtime imports, or other mechanisms Sovra cannot
+discover statically:
+
+```ts
+import { readFileSync } from 'node:fs';
+
+// sovra-depends-on ./templates/**/*.html
+// sovra-depends-on ../shared/schema.json
+export function render(name: string) {
+  return readFileSync(new URL(`./templates/${name}.html`, import.meta.url), 'utf8');
+}
+```
+
+Each comment adds one file path or glob, relative to the **source file's
+directory**, wherever the comment appears. Repeat it for multiple inputs; a match
+against any input makes that file and its consumers affected.
+
+- `*` and `?` match within a path segment; `**` matches across directories.
+  Character classes (`[ab]`) and alternatives (`*.{json,yaml}`) are supported.
+- Patterns match supplied changed paths, including added/deleted files and
+  dotfiles. Sovra does not enumerate the filesystem or follow these inputs'
+  imports. Use `/` as the path separator on all platforms.
+- Paths are unquoted and may contain spaces. Absolute paths, `npm:` entries,
+  negated patterns, and resolver aliases are not supported here.
+- Use ` -- reason` to explain either directive. Line comments and block comments
+  such as `/* sovra-depends-on ./data.json */` are supported.
+
+A declared input does not suppress existing import analysis. For a dynamic
+import, explicitly replace its unsupported edge with the known input paths:
+
+```ts
+// sovra-depends-on ./messages/*.json
+// sovra-ignore-next-line -- all possible runtime modules are covered above
+export const loadMessages = (locale: string) => import(`./messages/${locale}.json`);
+```
+
 ## Failure behavior
 
 Unresolved imports, dynamic import/require arguments, unreadable source files,
