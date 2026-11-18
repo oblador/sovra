@@ -72,3 +72,15 @@ const typeImportIgnored = getAffected(
 );
 assert.deepEqual(typeImportIgnored.errors, []);
 assert.deepEqual(typeImportIgnored.files, []);
+
+const workerFixturesPath = resolve(fixturesPath, '../workers');
+const workerTestFile = join(workerFixturesPath, 'feature.spec.ts');
+for (const changedFile of ['myfeature.worker.ts', 'worker-utils.ts']) {
+  const workerAffected = getAffected(
+    [...testFiles, workerTestFile],
+    [join(workerFixturesPath, changedFile)],
+    resolverOptions,
+  );
+  assert.deepEqual(workerAffected.errors, []);
+  assert.deepEqual(workerAffected.files, [workerTestFile]);
+}

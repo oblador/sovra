@@ -165,6 +165,80 @@ impl CollectImports<'_> {
             ),
         }
     }
+
+    fn collect_worker_url(&mut self, url: &oxc_ast::ast::NewExpression<'_>) {
+        use oxc_ast::ast::Expression;
+
+        let path = match url.arguments[0]
+            .as_expression()
+            .map(Expression::get_inner_expression)
+        {
+            Some(Expression::StringLiteral(literal)) => literal.value.as_str(),
+            Some(Expression::TemplateLiteral(literal)) if literal.expressions.is_empty() => literal
+                .quasis
+                .first()
+                .and_then(|quasi| quasi.value.cooked.as_ref().and_then(|value| value.as_str())),
+            _ => {
+                self.errors.push(
+                    OxcDiagnostic::error("Worker URL must have a static string literal path")
+                        .with_label(url.span),
+                );
+                return;
+            }
+        };
+        let Some(path) = path else {
+            self.errors.push(
+                OxcDiagnostic::error("Module path must not contain lone surrogates")
+                    .with_label(url.span),
+            );
+            return;
+        };
+        // Remote and root-relative URLs do not identify source-relative files.
+        if path.starts_with('/') || path.contains(':') {
+            return;
+        }
+        // URL paths without a leading `./` are still relative, not npm packages.
+        let path = if path.starts_with("./") || path.starts_with("../") {
+            path.to_string()
+        } else {
+            format!("./{path}")
+        };
+        self.import_paths.insert(path);
+    }
+}
+
+/// Recognize the bundler convention `new Worker(new URL(path, import.meta.url))`.
+/// Other URL uses may refer to assets or runtime locations rather than modules.
+fn match_worker_url<'a>(
+    worker: &'a oxc_ast::ast::NewExpression<'a>,
+) -> Option<&'a oxc_ast::ast::NewExpression<'a>> {
+    use oxc_ast::ast::Expression;
+
+    if !worker.callee.is_specific_id("Worker") && !worker.callee.is_specific_id("SharedWorker") {
+        return None;
+    }
+    let Expression::NewExpression(url) = worker
+        .arguments
+        .first()?
+        .as_expression()?
+        .get_inner_expression()
+    else {
+        return None;
+    };
+    if !url.callee.is_specific_id("URL") || url.arguments.len() != 2 {
+        return None;
+    }
+    let base = url.arguments[1]
+        .as_expression()?
+        .get_inner_expression()
+        .as_member_expression()?;
+    (matches!(
+        base.object().get_inner_expression(),
+        Expression::ImportMeta(_)
+    ) && base
+        .static_property_name()
+        .is_some_and(|name| name == "url"))
+    .then_some(url)
 }
 
 enum RequireCallMatch<'a> {
@@ -323,6 +397,17 @@ impl<'a, 'b> Visit<'a> for CollectImports<'b> {
             }
         }
         walk::walk_call_expression(self, it);
+    }
+
+    fn visit_new_expression(&mut self, it: &oxc_ast::ast::NewExpression<'a>) {
+        if !self.directives.ignores(it.span) {
+            if let Some(url) = match_worker_url(it) {
+                if !self.directives.ignores(url.span) {
+                    self.collect_worker_url(url);
+                }
+            }
+        }
+        walk::walk_new_expression(self, it);
     }
 }
 
@@ -484,6 +569,75 @@ mod tests {
     #[test]
     fn test_require_literal() {
         assert_imports("require('hest');", vec!["hest"]);
+    }
+
+    #[test]
+    fn test_worker_module_urls() {
+        for source in [
+            "new Worker(new URL('./myfeature.worker.ts', import.meta.url));",
+            "new Worker(new URL('./myfeature.worker.ts', import.meta.url), { type: 'module' });",
+            "new SharedWorker(new URL('./myfeature.worker.ts', import.meta.url));",
+            "new Worker(new URL(`./myfeature.worker.ts`, import.meta.url));",
+            "new Worker(new URL('myfeature.worker.ts', import.meta.url));",
+            r"new Worker(new URL('./myfeature\u002eworker.ts', import.meta.url));",
+            r"new Worker(new URL(`./myfeature\u002eworker.ts`, import.meta.url));",
+            "new Worker((new URL(('./myfeature.worker.ts'), (import.meta.url))));",
+        ] {
+            assert_imports(source, vec!["./myfeature.worker.ts"]);
+        }
+        assert_ts_imports(
+            "const worker: Worker = new Worker(new URL('../myfeature.worker.ts', import.meta.url));",
+            vec!["../myfeature.worker.ts"],
+            true,
+        );
+    }
+
+    #[test]
+    fn test_worker_urls_do_not_match_unrelated_expressions() {
+        for source in [
+            "new URL('./image.svg', import.meta.url);",
+            "new Other(new URL('./myfeature.worker.ts', import.meta.url));",
+            "Worker(new URL('./myfeature.worker.ts', import.meta.url));",
+            "new Worker(new Other('./myfeature.worker.ts', import.meta.url));",
+            "new Worker(new URL('./myfeature.worker.ts', location.href));",
+            "new Worker(new URL('./myfeature.worker.ts', import.meta.other));",
+            "new Worker(new URL('./myfeature.worker.ts', other.meta.url));",
+            "new Worker(new URL('https://example.com/worker.js', import.meta.url));",
+            "new Worker(new URL('//example.com/worker.js', import.meta.url));",
+            "new Worker(new URL('/worker.js', import.meta.url));",
+            "new Worker(new URL('data:text/javascript,postMessage(1)', import.meta.url));",
+        ] {
+            assert_imports(source, vec![]);
+        }
+    }
+
+    #[test]
+    fn test_worker_dynamic_url_errors() {
+        for source in [
+            "new Worker(new URL(path, import.meta.url));",
+            "new Worker(new URL(`./${name}.worker.ts`, import.meta.url));",
+            "new Worker(new URL('./' + name, import.meta.url));",
+            r"new Worker(new URL('./\ud800.worker.ts', import.meta.url));",
+            r"new Worker(new URL(`./\ud800.worker.ts`, import.meta.url));",
+        ] {
+            asset_error(source);
+        }
+    }
+
+    #[test]
+    fn test_worker_ignore_and_nested_imports() {
+        assert_imports(
+            "// sovra-ignore-next-line\nnew Worker(\n  new URL('./ignored.worker.ts', import.meta.url),\n  { name: require('./kept') }\n);",
+            vec!["./kept"],
+        );
+        assert_imports(
+            "new Worker(\n  // sovra-ignore-next-line\n  new URL(path, import.meta.url)\n);",
+            vec![],
+        );
+        assert_imports(
+            "new Worker(new URL('./myfeature.worker.ts', import.meta.url), { name: require('./options') });",
+            vec!["./myfeature.worker.ts", "./options"],
+        );
     }
 
     #[test]
