@@ -2,6 +2,7 @@ import yaml from 'js-yaml';
 
 import { type DependencyGraph, type ResolvedPackage, splitNameVersion } from '../graph';
 import type { LockfileFormat, ParseInput } from './types';
+import { parsePnpmV13, type PnpmV13Lock } from './pnpm-v13';
 
 interface PnpmEntry {
   dependencies?: Record<string, string>;
@@ -60,14 +61,17 @@ function importerVersion(spec: { version?: string } | string | undefined): strin
   return typeof spec === 'string' ? spec : spec.version;
 }
 
-/** Parser for `pnpm-lock.yaml` (lockfile versions 5, 6 and 9). */
+/** Parser for `pnpm-lock.yaml` (lockfile versions 5, 6, 9 and 13). */
 export const pnpmFormat: LockfileFormat = {
   name: 'pnpm',
   parse({ lockfile, importerPath }: ParseInput): DependencyGraph {
-    const lock = yaml.load(lockfile) as PnpmLock;
+    // Recent pnpm versions can prepend a boot document for pnpm/config deps.
+    // The application's dependency graph is always in the final document.
+    const lock = yaml.loadAll(lockfile).at(-1) as PnpmLock;
     const major = parseInt(String(lock?.lockfileVersion), 10);
+    if (major === 13) return parsePnpmV13(lock as PnpmV13Lock, importerPath);
     if (![5, 6, 9].includes(major)) {
-      throw new Error('Unsupported pnpm lockfile: expected lockfileVersion 5, 6, or 9');
+      throw new Error('Unsupported pnpm lockfile: expected lockfileVersion 5, 6, 9, or 13');
     }
     const v5 = major === 5;
 
