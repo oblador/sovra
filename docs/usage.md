@@ -187,8 +187,9 @@ dependency no longer propagate through this edge; other imports of the same
 dependency are unaffected. Edits to the importing file itself still affect its
 consumers. It does not change runtime behavior or exclude a test from execution.
 
-The directive applies to imports, re-exports, `require()` calls, and configured
-require aliases that **start on the immediately following line**. Multiline
+The directive applies to imports, re-exports, `require()` calls, configured
+require aliases, and `Worker`/`SharedWorker` constructors with module-relative
+URLs that **start on the immediately following line**. Multiline
 imports are supported; put the comment above the opening `import`, not above its
 `from` clause. A blank line breaks the association. Imports inside call arguments
 on later lines are still analyzed.

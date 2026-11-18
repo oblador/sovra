@@ -374,6 +374,37 @@ mod tests {
     }
 
     #[test]
+    fn test_worker_changes_propagate_to_consumers() {
+        for change in [
+            "fixtures/workers/feature.ts",
+            "fixtures/workers/myfeature.worker.ts",
+            "fixtures/workers/worker-utils.ts",
+        ] {
+            assert_collect_affected(
+                vec![
+                    "fixtures/workers/feature.spec.ts",
+                    "fixtures/require/suite.spec.js",
+                ],
+                vec![change],
+                vec!["fixtures/workers/feature.spec.ts"],
+                Resolver::new(ResolveOptions {
+                    extensions: vec![".ts".into(), ".js".into()],
+                    ..ResolveOptions::default()
+                }),
+            );
+        }
+        assert_collect_affected(
+            vec!["fixtures/workers/feature.spec.ts"],
+            vec!["fixtures/require/module.js"],
+            vec![],
+            Resolver::new(ResolveOptions {
+                extensions: vec![".ts".into(), ".js".into()],
+                ..ResolveOptions::default()
+            }),
+        );
+    }
+
+    #[test]
     #[ignore]
     fn test_require_context() {
         assert_affected(

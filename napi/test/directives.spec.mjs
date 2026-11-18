@@ -52,6 +52,8 @@ for (const [name, source, aliases] of [
   ['star re-export', 'export * from "missing";', []],
   ['dynamic import', 'export const load = () => import(variable);', []],
   ['require', 'export const load = () => require(variable);', []],
+  ['worker', 'new Worker(\n  new URL("./missing.worker.ts", import.meta.url),\n  { type: "module" }\n);', []],
+  ['dynamic worker URL', 'new Worker(new URL(variable, import.meta.url));', []],
   ['require alias', 'export const load = () => custom.load(variable);', ['custom.load']],
   ['TypeScript import equals', 'import value = require("missing");', []],
   ['TypeScript import type', 'type Value = import("missing").Value;', []],
@@ -75,7 +77,7 @@ test('ignore-next-line uses physical lines and UTF-8 offsets', t => {
 });
 
 test('ignoring a call does not hide dependencies on later lines inside its arguments', t => {
-  for (const expression of ['require', 'import', 'wrapper']) {
+  for (const expression of ['require', 'import', 'wrapper', 'new Worker']) {
     const fixture = project(t, {
       'suite.ts': `// sovra-ignore-next-line\n${expression}(\n  require("./kept")\n);`,
       'kept.ts': 'export const kept = 1;',
