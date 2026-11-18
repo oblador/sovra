@@ -11,7 +11,7 @@ updating `y@1` affects `x` without automatically affecting `z`.
 
 | Package manager | Files | Lockfile versions |
 | --- | --- | --- |
-| pnpm | `pnpm-lock.yaml` | 5, 6, 9 |
+| pnpm | `pnpm-lock.yaml` | 5, 6, 9, 13 |
 | Yarn Classic | `yarn.lock` | 1 |
 | Yarn Berry | `yarn.lock` | Berry format with `__metadata` |
 | npm | `package-lock.json`, `npm-shrinkwrap.json` | 2, 3 |
