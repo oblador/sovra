@@ -62,6 +62,8 @@ export class JestRunner implements TestRunner {
   private readonly require: JestRequire;
 
   constructor(options: JestRunnerOptions = {}) {
+    // Match jest-cli's bootstrap before loading configs, transforms, or test modules.
+    process.env.NODE_ENV ??= 'test';
     this.options = options;
     this.rootDir = path.resolve(options.rootDir ?? process.cwd());
     // Resolve jest's own packages from the project so versions always match.
@@ -95,6 +97,7 @@ export class JestRunner implements TestRunner {
       SearchSource: new (context: unknown) => {
         getTestPaths: (
           globalConfig: JestGlobalConfig,
+          projectConfig: JestProjectConfig,
         ) => Promise<{ tests: JestTest[] }>;
       };
     };
@@ -129,7 +132,8 @@ export class JestRunner implements TestRunner {
         watchman: false,
       });
       const search = new SearchSource(context);
-      const { tests } = await search.getTestPaths(globalConfig);
+      // Jest 30 requires the project config; Jest 29 ignores it when onlyChanged is off.
+      const { tests } = await search.getTestPaths(globalConfig, config);
       const projectTestFiles = tests.map((test) => test.path);
       const projectSentinels = new Set([
         ...globalSentinels,
