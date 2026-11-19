@@ -10,6 +10,28 @@ import { assertAnalysisOptions } from '../../../test/helpers/analysis-options.mj
 const exec = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+for (const nodeEnv of [undefined, 'development']) {
+  test(`Jest CLI uses NODE_ENV=${nodeEnv ?? 'test'} for config and execution`, async (t) => {
+    const root = mkdtempSync(path.resolve(here, '../__fixtures__/environment-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const expected = nodeEnv ?? 'test';
+    writeFileSync(path.join(root, 'jest.config.cjs'), `
+      if (process.env.NODE_ENV !== ${JSON.stringify(expected)}) throw new Error('wrong NODE_ENV during config loading');
+      module.exports = { testMatch: ['<rootDir>/*.test.js'], watchman: false };
+    `);
+    writeFileSync(path.join(root, 'environment.test.js'), `
+      test('runtime environment', () => expect(process.env.NODE_ENV).toBe(${JSON.stringify(expected)}));
+    `);
+    const env = { ...process.env };
+    if (nodeEnv === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = nodeEnv;
+    const result = await exec(process.execPath, [
+      path.resolve(here, '../dist/cli.js'), 'environment.test.js', '--', '--runInBand',
+    ], { cwd: root, env });
+    assert.match(result.stderr, /1 passed, 1 total/);
+  });
+}
+
 test('Jest CLI applies source-analysis options from Sovra config', async (t) => {
   await assertAnalysisOptions(t, 'jest', new URL('../dist/cli.js', import.meta.url));
 });
