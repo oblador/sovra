@@ -67,6 +67,67 @@ test('unrelated change selects no tests', (t) => {
   });
 });
 
+test('installed setup modules are opaque package dependencies, while local setup stays in the graph', (t) => {
+  const installedSetup = 'node_modules/@native/preset/setup.js';
+  const config = fixture(t, {
+    'node_modules/@native/preset/package.json': '{"exports":{"./setup":"./setup.js"}}',
+    [installedSetup]: '// @flow\nimport type { Native } from "./types"; require(dynamicMock);',
+  });
+  config.projects[0].sentinelFiles.push(path.join(config.rootDir, installedSetup));
+  assert.deepEqual(decideAffected({ config, changedFiles: ['src/math.js'] }), {
+    kind: 'run-selected', testFiles: [config.projects[0].testFiles[0]],
+  });
+  for (const changedDependencies of [['@native/preset'], ['@native'], ['@native/preset/helpers']]) {
+    assert.equal(decideAffected({ config, changedFiles: [], changedDependencies }).kind, 'run-all');
+  }
+  assert.deepEqual(decideAffected({ config, changedFiles: [], changedDependencies: ['@native/preset-extra'] }), {
+    kind: 'none',
+  });
+});
+
+for (const [setup, dependency] of [
+  ['node_modules/preset/setup.js', 'preset'],
+  ['../node_modules/aliased-preset/setup.js', 'aliased-preset'],
+  ['node_modules/@native/preset/node_modules/private-setup/setup.js', '@native/preset'],
+]) {
+  test(`setup ownership needs no installation: ${setup}`, (t) => {
+    const config = fixture(t, { 'util.test.js': 'export {};' });
+    rmSync(path.join(config.rootDir, 'node_modules'), { recursive: true });
+    config.projects[0].sentinelFiles.push(path.join(config.rootDir, setup));
+    assert.deepEqual(decideAffected({ config, changedFiles: ['src/math.js'] }), {
+      kind: 'run-selected', testFiles: [config.projects[0].testFiles[0]],
+    });
+    assert.equal(decideAffected({ config, changedFiles: [], changedDependencies: [dependency] }).kind, 'run-all');
+    assert.equal(decideAffected({ config, changedFiles: [setup] }).kind, 'run-all');
+    assert.deepEqual(decideAffected({ config, changedFiles: [], changedDependencies: [`${dependency}-extra`] }), {
+      kind: 'none',
+    });
+  });
+}
+
+for (const setup of [
+  'node_modules/.pnpm/physical-name@1.0.0/node_modules/physical-name/setup.js',
+  'external/node_modules/private-setup/setup.js',
+]) {
+  test(`a setup with unknown package ownership stays in the source graph: ${setup}`, (t) => {
+    const helper = path.join(path.dirname(setup), 'helper.js');
+    const config = fixture(t, {
+      [setup]: "import './helper.js';",
+      [helper]: 'export const setup = true;',
+    });
+    config.projects[0].sentinelFiles.push(path.join(config.rootDir, setup));
+    assert.deepEqual(decideAffected({ config, changedFiles: ['src/math.js'] }), {
+      kind: 'run-selected', testFiles: [config.projects[0].testFiles[0]],
+    });
+    assert.equal(decideAffected({ config, changedFiles: [helper] }).kind, 'run-all');
+    assert.deepEqual(decideAffected({ config, changedFiles: [], changedDependencies: ['unrelated'] }), {
+      kind: 'none',
+    });
+    writeFileSync(path.join(config.rootDir, setup), '// @flow\nimport type { Native } from "./types";');
+    assert.equal(decideAffected({ config, changedFiles: ['src/math.js'] }).kind, 'run-all');
+  });
+}
+
 test('runAllOn mixes files, globs and npm: packages in one array', (t) => {
   const config = fixture(t, { 'tool.config.js': "import './src/setup-helper.js';" });
   const runAllOn = ['tool.config.js', 'config/**/*.json', 'npm:typescript'];
