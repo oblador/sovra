@@ -22,6 +22,19 @@ export interface DecideOptions {
   onError?: (error: string) => void;
 }
 
+/** Classify setup paths without reading, resolving, or loading installed packages. */
+function getPackageForFile(file: string, rootDir: string): string | undefined {
+  const segments = path.relative(rootDir, file).split(path.sep);
+  // Nested setup dependencies are tracked through the outer, app-visible package.
+  const index = segments.indexOf('node_modules');
+  if (index === -1) return undefined;
+  const name = segments[index + 1];
+  // Store paths and node_modules below another project do not reveal the importable name.
+  if (!name || name.startsWith('.') || !segments.slice(0, index).every((part) => part === '..')) return undefined;
+  const scoped = name.startsWith('@') && segments[index + 2];
+  return scoped ? `${name}/${segments[index + 2]}` : name;
+}
+
 /**
  * Select tests from explicit change data and resolved configuration. Reads the
  * source import graph, but never invokes Git, loads runner config, or runs tests.
@@ -66,9 +79,23 @@ export function decideAffected(opts: DecideOptions): Decision {
   const { getAffected } = require('sovra') as typeof import('sovra');
 
   for (const project of projects) {
-    const sentinelSet = new Set(project.sentinelFiles);
+    const sentinelSet = new Set<string>();
+    const sentinelPackages =[]
+    for (const file of project.sentinelFiles) {
+      const pkgName = getPackageForFile(file, project.rootDir)
+      if(pkgName) {
+        sentinelPackages.push(`npm:${pkgName}`);
+      } else {
+        sentinelSet.add(file);
+      }
+    }
+    const dependencyReason = matchRunAllOn(sentinelPackages, cwd, [], changedDeps);
+    if (dependencyReason) return { kind: 'run-all', reason: dependencyReason };
     const result = getAffected(
-      [...new Set([...project.testFiles, ...sentinelSet])],
+      [...new Set([
+        ...project.testFiles,
+        ...sentinelSet,
+      ])],
       changes,
       project.resolveOptions,
       project.ignoreTypeImports,
