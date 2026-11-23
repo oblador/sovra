@@ -221,8 +221,8 @@ against any input makes that file and its consumers affected.
 - Patterns match supplied changed paths, including added/deleted files and
   dotfiles. Sovra does not enumerate the filesystem or follow these inputs'
   imports. Use `/` as the path separator on all platforms.
-- Paths are unquoted and may contain spaces. Absolute paths, `npm:` entries,
-  negated patterns, and resolver aliases are not supported here.
+- Paths are unquoted and may contain spaces. File inputs must be relative and
+  use positive patterns. Resolver aliases apply only to imports.
 - Use ` -- reason` to explain either directive. Line comments and block comments
   such as `/* sovra-depends-on ./data.json */` are supported.
 

@@ -2,12 +2,90 @@ use globset::{GlobBuilder, GlobMatcher};
 use oxc::diagnostics::OxcDiagnostic;
 use oxc_ast::ast::Comment;
 use oxc_span::Span;
-use std::path::Path;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+#[derive(Default)]
+pub struct DeclaredInputs {
+    files: Vec<GlobMatcher>,
+    packages: Vec<String>,
+}
+
+impl DeclaredInputs {
+    fn add(&mut self, argument: &str) -> Result<(), String> {
+        if let Some(package) = argument.strip_prefix("npm:") {
+            if !is_package_input(package) {
+                return Err(
+                    "sovra-depends-on expects a package, scope, or subpath after npm:".into(),
+                );
+            }
+            self.packages.push(package.to_owned());
+        } else {
+            if argument.is_empty() {
+                return Err("sovra-depends-on requires a file path, glob, or npm: entry".into());
+            }
+            if Path::new(argument).is_absolute()
+                || argument.starts_with('!')
+                || argument.contains(':')
+            {
+                return Err(
+                    "sovra-depends-on expects a relative file path or glob, without negation"
+                        .into(),
+                );
+            }
+            let glob = GlobBuilder::new(argument.trim_start_matches("./"))
+                .literal_separator(true)
+                .backslash_escape(true)
+                .build()
+                .map_err(|error| format!("Invalid sovra-depends-on glob: {error}"))?;
+            self.files.push(glob.compile_matcher());
+        }
+        Ok(())
+    }
+
+    pub fn matches(
+        &self,
+        directory: &Path,
+        changed_files: &HashSet<PathBuf>,
+        changed_packages: &HashSet<String>,
+    ) -> bool {
+        self.packages.iter().any(|input| {
+            changed_packages.iter().any(|changed| {
+                // Either prefix can be broader, e.g. a scope annotation or a whole-package change.
+                input
+                    .split('/')
+                    .zip(changed.split('/'))
+                    .all(|(a, b)| a == b)
+            })
+        }) || (!self.files.is_empty()
+            && changed_files.iter().any(|file| {
+                pathdiff::diff_paths(file, directory)
+                    .is_some_and(|relative| self.files.iter().any(|glob| glob.is_match(&relative)))
+            }))
+    }
+}
+
+fn is_package_input(input: &str) -> bool {
+    if input.contains(char::is_whitespace)
+        || input.contains([':', '\\', '*', '?', '[', ']', '{', '}', '(', ')'])
+    {
+        return false;
+    }
+    let (path, name_segments) = input.strip_prefix('@').map_or((input, 1), |rest| (rest, 2));
+    let mut segments = path.split('/');
+    segments
+        .by_ref()
+        .take(name_segments)
+        .all(|name| !name.is_empty() && !name.starts_with(['.', '!']) && !name.contains('@'))
+        && segments.all(|segment| !matches!(segment, "" | "." | ".."))
+}
 
 #[derive(Default)]
 pub struct Directives {
     ignored_lines: Vec<Span>,
-    pub inputs: Vec<GlobMatcher>,
+    pub inputs: DeclaredInputs,
 }
 
 pub fn is_directive(comment: &Comment, source: &str) -> bool {
@@ -40,29 +118,7 @@ impl Directives {
                     }
                     None
                 }
-                "sovra-depends-on" if !argument.is_empty() => {
-                    if Path::new(argument).is_absolute()
-                        || argument.starts_with('!')
-                        || argument.contains(':')
-                    {
-                        Some("sovra-depends-on expects a relative file path or glob, without negation".to_string())
-                    } else {
-                        match GlobBuilder::new(argument.trim_start_matches("./"))
-                            .literal_separator(true)
-                            .backslash_escape(true)
-                            .build()
-                        {
-                            Ok(glob) => {
-                                directives.inputs.push(glob.compile_matcher());
-                                None
-                            }
-                            Err(error) => Some(format!("Invalid sovra-depends-on glob: {error}")),
-                        }
-                    }
-                }
-                "sovra-depends-on" => {
-                    Some("sovra-depends-on requires a file path or glob".to_string())
-                }
+                "sovra-depends-on" => directives.inputs.add(argument).err(),
                 "sovra-ignore-next-line" => Some(
                     "sovra-ignore-next-line takes no arguments; use ` -- ` for a reason"
                         .to_string(),

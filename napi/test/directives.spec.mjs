@@ -130,6 +130,33 @@ test('literal input paths and single-star globs stay file-relative and shallow',
   }
 });
 
+test('declared npm inputs match package changes and propagate to consumers', t => {
+  const fixture = project(t, {
+    'suite.ts': 'import "./reader";',
+    'reader.ts': [
+      '// sovra-depends-on npm:tool',
+      '/* sovra-depends-on npm:@plugins -- runtime plugins */',
+      '// sovra-depends-on npm:@vendor/client/templates',
+      '// sovra-depends-on ./config.json',
+    ].join('\n'),
+    'other.ts': 'export const other = 1;',
+  });
+  const entries = ['suite.ts', 'reader.ts', 'other.ts'];
+  for (const change of [
+    'npm:tool', 'npm:tool/loader', 'npm:@plugins/extra', 'npm:@vendor',
+    'npm:@vendor/client', 'npm:@vendor/client/templates', 'npm:@vendor/client/templates/html',
+    'config.json',
+  ]) {
+    assert.deepEqual(fixture.run([change], entries), { files: ['reader.ts', 'suite.ts'], errors: [] }, change);
+  }
+  for (const change of [
+    'npm:toolkit', 'npm:@plugins-extra/extra', 'npm:@vendor/other', 'npm:@vendor/client/core',
+    'npm:@vendor/client/templates-old', 'tool', 'node_modules/tool/index.js',
+  ]) {
+    assert.deepEqual(fixture.run([change], entries), { files: [], errors: [] }, change);
+  }
+});
+
 test('editing directives on a re-export file still affects its consumers', t => {
   const fixture = project(t, {
     'suite.ts': 'import "./barrel";',
@@ -149,7 +176,19 @@ test('declared inputs use the original change list, including changed barrels', 
   assert.deepEqual(fixture.run(['barrel.ts']), { files: ['suite.ts'], errors: [] });
 });
 
-for (const directive of ['sovra-depends-on', 'sovra-depends-on ./assets/[', 'sovra-ignore-next-line unexpected', 'sovra-depend-on ./assets/*.json']) {
+for (const directive of [
+  'sovra-depends-on',
+  'sovra-depends-on ./assets/[',
+  'sovra-depends-on npm:',
+  'sovra-depends-on npm:@/tool',
+  'sovra-depends-on npm:@scope/tool@2',
+  'sovra-depends-on npm:@scope/*',
+  'sovra-depends-on npm:!tool',
+  'sovra-depends-on npm:./tool',
+  'sovra-depends-on npm:tool//plugin',
+  'sovra-ignore-next-line unexpected',
+  'sovra-depend-on ./assets/*.json',
+]) {
   test(`malformed directive is an analysis error: ${directive}`, t => {
     const fixture = project(t, { 'suite.ts': `// ${directive}\nexport const value = 1;` });
     const result = fixture.run([]);

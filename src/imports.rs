@@ -5,12 +5,12 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::{collections::HashSet, env, path::PathBuf, sync::Arc};
 
-use crate::directives::{self, Directives};
+use crate::directives::{self, DeclaredInputs, Directives};
 
 pub struct ImportsReturn {
     pub errors: Vec<String>,
     pub imports_paths: Vec<String>,
-    pub inputs: Vec<globset::GlobMatcher>,
+    pub inputs: DeclaredInputs,
 }
 
 /// Only direct re-exports count: local declarations, imports, directives and

@@ -45,7 +45,7 @@ enum ScanEdge {
         import: PathBuf,
         is_in_node_modules: bool,
     },
-    /// An explicit file input or unresolved npm import matched the changeset.
+    /// A declared input or unresolved npm import matched the changeset.
     ChangedInput,
     /// Resolve failed and didn't match any changeset entry; surface it.
     UnresolvedError(String),
@@ -113,11 +113,9 @@ fn scan_file(
         };
     };
 
-    if !result.inputs.is_empty()
-        && changed_files.iter().any(|file| {
-            pathdiff::diff_paths(file, parent_path)
-                .is_some_and(|relative| result.inputs.iter().any(|glob| glob.is_match(&relative)))
-        })
+    if result
+        .inputs
+        .matches(parent_path, changed_files, changed_packages)
     {
         edges.push(ScanEdge::ChangedInput);
     }
